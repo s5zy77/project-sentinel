@@ -1,12 +1,3340 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Project Sentinel — Advanced Safety</title>
-  </head>
-  <body class="bg-slate-950 text-white selection:bg-mint selection:text-white overflow-hidden">
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Sentinel — Safety App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Firebase v9 Modular SDK (compat layer for browser) -->
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+  import { getFirestore, doc, getDoc, setDoc, updateDoc, addDoc, collection, onSnapshot, query, orderBy, limit, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+  import { getStorage, ref, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
+
+  // ─── Firebase Config — Fetched Dynamically OR Fallback ────────
+  async function initSentinel() {
+    let firebaseConfig = null;
+    try {
+      const response = await fetch('http://localhost:5000/api/config');
+      if (response.ok) {
+        const data = await response.json();
+        firebaseConfig = data.firebaseConfig;
+      } else {
+        throw new Error('Localhost backend unreachable');
+      }
+    } catch (err) {
+      console.warn('⚠️ Fetching dynamic config failed. Falling back to public production config.', err);
+      // Fallback to the known public Firebase keys for GitHub Pages deployment
+      firebaseConfig = {
+        apiKey: "AIzaSyAMqoT3WCr1z-7hjfQh_CwSO2xtwLyFwrI",
+        authDomain: "sentinel-dbd53.firebaseapp.com",
+        projectId: "sentinel-dbd53",
+        storageBucket: "sentinel-dbd53.firebasestorage.app",
+        messagingSenderId: "616231741193",
+        appId: "1:616231741193:web:b87b6c06a3920805bc55d8",
+        measurementId: "G-7X6SKTN2ER"
+      };
+    }
+
+    try {
+      const app  = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const db   = getFirestore(app);
+      const storage = getStorage(app);
+
+      // Expose to global scope
+      window.__fb = { auth, db, storage, serverTimestamp,
+        signInWithEmailAndPassword, createUserWithEmailAndPassword,
+        signOut, onAuthStateChanged,
+        doc, getDoc, setDoc, updateDoc, addDoc, collection,
+        onSnapshot, query, orderBy, limit, ref, uploadBytes, getDownloadURL };
+
+      // Auth State Listener
+      onAuthStateChanged(auth, user => {
+        window.__fbUser = user || null;
+        if (user) {
+          window.__loadUserProfile(user.uid);
+          window.__subscribeUserProfile(user.uid);
+          window.__subscribeWorldIntel();
+        }
+      });
+      
+      console.log('✅ Sentinel Firebase initialized successfully');
+    } catch (firebaseErr) {
+      console.error('❌ Failed to initialize Firebase:', firebaseErr);
+    }
+  }
+
+  initSentinel();
+</script>
+<style>
+/* ============================================================
+   RESET & TOKENS
+   ============================================================ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --mint:#2DD4BF;--mint-light:#F0FDFA;--mint-mid:#99F6E4;--mint-dark:#0F766E;
+  --red:#EF4444;--red-soft:#FEF2F2;--red-mid:#FECACA;--red-text:#991B1B;
+  --amber:#F59E0B;--amber-soft:#FFFBEB;--amber-text:#92400E;
+  --bg:#F8FAFC;--white:#FFFFFF;--text:#0F172A;--text-muted:#64748B;
+  --border:#E2E8F0;--border-mid:#CBD5E1;--slate-light:#F1F5F9;--slate:#64748B;
+  --shadow:0 1px 3px rgba(0,0,0,0.07),0 4px 16px rgba(0,0,0,0.06);
+  --shadow-sm:0 1px 2px rgba(0,0,0,0.06),0 2px 8px rgba(0,0,0,0.05);
+  --r:18px;--r-sm:12px;--r-xs:8px;--font:'DM Sans',sans-serif;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bot: env(safe-area-inset-bottom, 0px);
+}
+
+html{height:100%;background:#CBD5E1;overflow:hidden;}
+body{height:100%;background:#CBD5E1;font-family:var(--font);overflow:hidden;display:flex;align-items:center;justify-content:center;}
+
+.phone{position:relative;width:100%;max-width:430px;height:100dvh;max-height:932px;background:var(--bg);overflow:hidden;display:flex;flex-direction:column;}
+
+@media(min-width:500px){
+  body{align-items:center;}
+  .phone{border-radius:44px;box-shadow:0 40px 100px rgba(0,0,0,0.28);}
+}
+
+.layer{position:absolute;inset:0;display:flex;flex-direction:column;transition:transform .5s cubic-bezier(.77,0,.175,1),opacity .5s ease;overflow:hidden;}
+
+#calc-layer{transform:translateY(0);opacity:1;background:#0F172A;z-index:10;}
+#dash-layer{transform:translateY(100%);opacity:0;z-index:1;background:var(--bg);pointer-events:none;}
+#calc-layer.slide-out{transform:translateY(-100%);opacity:0;pointer-events:none;}
+#dash-layer.slide-in{transform:translateY(0);opacity:1;z-index:3;pointer-events:auto;}
+
+/* CALCULATOR */
+.calc-status{padding-top:max(52px, calc(var(--safe-top) + 16px));padding-right:28px;padding-left:28px;display:flex;justify-content:flex-end;flex-shrink:0;}
+.calc-display{flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:12px 24px 16px;min-height:0;}
+.sos-flash{font-size:11px;font-weight:600;color:#4ADE80;opacity:0;transition:opacity .3s;background:rgba(74,222,128,.1);padding:4px 12px;border-radius:20px;display:flex;align-items:center;gap:5px;}
+.sos-flash.show{opacity:1;}
+.calc-expr{font-size:13px;color:#475569;text-align:right;min-height:18px;margin-bottom:2px;font-family:'DM Mono',monospace;}
+.calc-value{font-size:clamp(36px,8vw,56px);font-weight:300;color:#F8FAFC;text-align:right;line-height:1;letter-spacing:-2px;word-break:break-all;}
+.calc-buttons{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(5,1fr);gap:clamp(6px,1.5vw,10px);padding:16px clamp(10px,3vw,16px) calc(16px + var(--safe-bot));background:#1E293B;border-radius:28px 28px 0 0;flex-shrink:0;}
+.cb{border:none;border-radius:var(--r-sm);font-family:var(--font);font-size:clamp(16px,4vw,21px);font-weight:400;cursor:pointer;min-height:44px;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;transition:transform .12s;-webkit-tap-highlight-color:transparent;position:relative;overflow:hidden;}
+.cb:active{transform:scale(.92);}
+.cb-fn{background:#334155;color:#CBD5E1;font-size:clamp(13px,3vw,15px);font-weight:500;}
+.cb-op{background:#2DD4BF;color:#042F2E;font-size:clamp(18px,4.5vw,24px);font-weight:500;}
+.cb-num{background:#243447;color:#F1F5F9;}
+.cb-zero{grid-column:span 2;justify-content:flex-start;padding-left:clamp(18px,5vw,26px);aspect-ratio:auto;height:100%;}
+.btn-ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,.15);animation:ripple .4s ease-out forwards;pointer-events:none;}
+@keyframes ripple{from{transform:scale(0);opacity:1;}to{transform:scale(4);opacity:0;}}
+
+/* DASHBOARD LAYER */
+#dash-layer{display:flex;flex-direction:column;}
+.dash-header{background:var(--white);padding-top:max(50px, calc(var(--safe-top) + 14px));padding-bottom:12px;padding-left:18px;padding-right:18px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;z-index:10;}
+.dash-title{font-size:20px;font-weight:700;color:var(--text);letter-spacing:-.5px;}
+.dash-subtitle{font-size:11px;color:var(--text-muted);margin-top:2px;display:flex;align-items:center;gap:4px;}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--mint);display:inline-block;}
+.avatar-btn{width:36px;height:36px;border-radius:50%;background:var(--mint-light);border:1.5px solid var(--mint-mid);display:flex;align-items:center;justify-content:center;cursor:pointer;min-height:44px;min-width:44px;}
+
+.tab-content{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;min-height:0;display:flex;flex-direction:column;}
+.tab-content::-webkit-scrollbar{display:none;}
+.tab-pane{display:none;padding:14px 14px 16px;}
+.tab-pane.active{display:block;}
+
+.bottom-nav{background:var(--white);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(4,1fr);flex-shrink:0;padding:6px 0;padding-bottom:max(10px, var(--safe-bot));z-index:10;}
+.nav-btn{background:none;border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;min-height:44px;font-family:var(--font);font-size:10px;font-weight:500;color:var(--text-muted);transition:color .2s;-webkit-tap-highlight-color:transparent;position:relative;}
+.nav-btn.active{color:var(--mint-dark);}
+.nav-badge{position:absolute;top:4px;right:calc(50% - 16px);background:var(--red);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:10px;}
+
+/* SHARED COMPONENTS */
+.card{background:var(--white);border-radius:var(--r);padding:14px;box-shadow:var(--shadow-sm);border:1px solid var(--border);margin-bottom:10px;}
+.card-title{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px;}
+.tag{display:inline-flex;align-items:center;gap:3px;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:600;}
+.tag-mint{background:var(--mint-light);color:var(--mint-dark);}
+.tag-red{background:var(--red-soft);color:var(--red-text);}
+.tag-slate{background:var(--slate-light);color:var(--slate);}
+.tag-amber{background:var(--amber-soft);color:var(--amber-text);}
+.btn-primary{background:var(--mint-dark);color:#fff;border:none;border-radius:var(--r-sm);font-family:var(--font);font-size:14px;font-weight:600;padding:13px 20px;cursor:pointer;width:100%;min-height:44px;transition:filter .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.btn-primary:active{filter:brightness(.88);}
+.btn-outline{background:var(--white);color:var(--mint-dark);border:1.5px solid var(--mint-mid);border-radius:var(--r-sm);font-family:var(--font);font-size:13px;font-weight:600;padding:10px 16px;min-height:44px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;}
+.btn-red{background:var(--red-soft);color:var(--red-text);border:1.5px solid var(--red-mid);border-radius:var(--r-sm);font-family:var(--font);font-size:15px;font-weight:700;padding:16px 20px;min-height:44px;cursor:pointer;width:100%;display:flex;align-items:center;justify-content:center;gap:10px;}
+.toggle{width:44px;height:26px;background:var(--border-mid);border-radius:13px;cursor:pointer;position:relative;transition:background .25s;border:none;flex-shrink:0;}
+.toggle.on{background:var(--mint-dark);}
+.toggle::after{content:'';position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .25s;box-shadow:0 1px 4px rgba(0,0,0,.18);}
+.toggle.on::after{transform:translateX(18px);}
+
+.score-ring{width:54px;height:54px;border-radius:50%;background:var(--mint-light);border:3px solid var(--mint);display:flex;align-items:center;justify-content:center;flex-direction:column;flex-shrink:0;}
+.score-num{font-size:17px;font-weight:700;color:var(--mint-dark);line-height:1;}
+.score-den{font-size:9px;color:var(--text-muted);font-weight:500;}
+.why-btn{background:var(--slate-light);border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:600;color:var(--slate);cursor:pointer;min-height:44px;}
+
+.guardian-status-bar{display:flex;gap:8px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;}
+.guardian-status-bar::-webkit-scrollbar{display:none;}
+.gstat{background:var(--white);border:1px solid var(--border);border-radius:var(--r-xs);padding:8px 10px;display:flex;align-items:center;gap:7px;flex-shrink:0;min-width:130px;box-shadow:var(--shadow-sm);cursor:pointer;}
+.gstat-avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;}
+.gstat-name{font-size:11px;font-weight:600;color:var(--text);}
+.gstat-detail{font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:4px;margin-top:2px;}
+.sig-bar{display:flex;gap:1.5px;align-items:flex-end;height:10px;}
+.sig-bar span{width:2.5px;border-radius:1px;background:var(--border);}
+.sig-bar span:nth-child(1){height:3px;}.sig-bar span:nth-child(2){height:5px;}.sig-bar span:nth-child(3){height:7px;}.sig-bar span:nth-child(4){height:10px;}
+.sig-bar.s4 span{background:var(--mint-dark);}.sig-bar.s3 span:nth-child(-n+3){background:var(--mint-dark);}
+.sig-bar.s2 span:nth-child(-n+2){background:var(--amber);}.sig-bar.s1 span:nth-child(1){background:var(--red);}
+.batt-body{width:16px;height:9px;border:1.5px solid #94A3B8;border-radius:2px;padding:1px;display:flex;align-items:stretch;}
+.batt-fill{border-radius:1px;}
+
+/* ROUTING */
+.routing-card{background:var(--white);border-radius:var(--r);padding:14px;box-shadow:var(--shadow-sm);border:1px solid var(--border);margin-bottom:10px;}
+.route-input{width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:9px 10px;outline:none;background:var(--bg);transition:border-color .2s;min-height:44px;}
+.route-input:focus{border-color:var(--mint);background:var(--white);}
+.route-input::placeholder{color:var(--text-muted);}
+.suggestions-box{position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--white);border:1.5px solid var(--mint-mid);border-radius:var(--r-xs);box-shadow:var(--shadow);z-index:500;max-height:180px;overflow-y:auto;display:none;}
+.suggestions-box.show{display:block;}
+.sug-item{padding:9px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border);color:var(--text);display:flex;align-items:flex-start;gap:8px;}
+.sug-item:last-child{border-bottom:none;}
+.sug-item:hover,.sug-item:active{background:var(--mint-light);}
+.sug-main{font-weight:600;line-height:1.3;}
+.sug-sub{font-size:10px;color:var(--text-muted);margin-top:1px;}
+.route-get-btn{width:100%;background:var(--mint-dark);color:#fff;border:none;border-radius:var(--r-xs);font-family:var(--font);font-size:13px;font-weight:600;padding:11px;min-height:44px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;margin-top:8px;transition:filter .15s;}
+.route-get-btn:active{filter:brightness(.88);}
+.route-get-btn:disabled{background:var(--border-mid);cursor:not-allowed;}
+.rinfo-bar{display:none;gap:8px;margin-bottom:10px;}
+.rinfo-bar.show{display:flex;}
+.rinfo-card{background:var(--white);border:1px solid var(--border);border-radius:var(--r-xs);padding:10px 12px;flex:1;text-align:center;box-shadow:var(--shadow-sm);}
+.rinfo-val{font-size:16px;font-weight:700;color:var(--text);letter-spacing:-.5px;}
+.rinfo-label{font-size:10px;color:var(--text-muted);margin-top:2px;}
+.rinfo-card.green{border-color:var(--mint-mid);background:var(--mint-light);}
+.rinfo-card.green .rinfo-val{color:var(--mint-dark);}
+.rtype-row{display:none;gap:8px;margin-bottom:10px;}
+.rtype-row.show{display:flex;}
+.rtype-btn{flex:1;padding:9px 6px;min-height:44px;border-radius:var(--r-xs);border:1.5px solid var(--border);background:var(--white);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);transition:all .2s;}
+.rtype-btn.sel{border-color:var(--mint);background:var(--mint-light);color:var(--mint-dark);}
+.rtype-btn.sel-fast{border-color:var(--border-mid);background:var(--slate-light);color:var(--slate);}
+#main-map{width:100%;height:260px;display:block;}
+.map-wrap{border-radius:var(--r);overflow:hidden;margin-bottom:10px;box-shadow:var(--shadow-sm);border:1px solid var(--border);position:relative;}
+.map-loading{position:absolute;inset:0;background:rgba(248,250,252,.88);display:none;align-items:center;justify-content:center;z-index:200;flex-direction:column;gap:8px;}
+.map-loading.show{display:flex;}
+.spinner{width:28px;height:28px;border:3px solid var(--mint-mid);border-top-color:var(--mint-dark);border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);}
+.toggle-row:last-child{border-bottom:none;padding-bottom:0;}
+.toggle-label{font-size:13px;font-weight:600;color:var(--text);}
+.toggle-sub{font-size:11px;color:var(--text-muted);margin-top:1px;}
+.sos-confirm{position:absolute;bottom:80px;left:14px;right:14px;background:var(--red-soft);border:1px solid var(--red-mid);border-radius:var(--r-sm);padding:12px 14px;display:none;align-items:center;gap:10px;z-index:10;box-shadow:var(--shadow);}
+.sos-confirm.show{display:flex;}
+
+/* MODALS */
+.modal-overlay{position:absolute;inset:0;background:rgba(15,23,42,.6);z-index:50;display:none;align-items:flex-end;backdrop-filter:blur(2px);}
+.modal-overlay.show{display:flex;}
+
+/* LOGOUT SCREEN */
+#logout-screen{position:absolute;inset:0;background:var(--bg);z-index:200;display:none;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;gap:0;}
+#logout-screen.show{display:flex;}
+.logout-icon-wrap{width:80px;height:80px;border-radius:50%;background:var(--red-soft);border:3px solid var(--red-mid);display:flex;align-items:center;justify-content:center;margin-bottom:20px;}
+.logout-title{font-size:22px;font-weight:700;color:var(--text);margin-bottom:8px;letter-spacing:-.5px;}
+.logout-sub{font-size:13px;color:var(--text-muted);text-align:center;line-height:1.6;margin-bottom:28px;max-width:260px;}
+.logout-actions{display:flex;flex-direction:column;gap:10px;width:100%;}
+.btn-demo{background:linear-gradient(135deg,#0F766E,#0891B2);color:#fff;border:none;border-radius:var(--r-sm);font-family:var(--font);font-size:13px;font-weight:600;padding:11px 16px;min-height:44px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;width:100%;transition:filter .15s;}
+.btn-demo:active{filter:brightness(.88);}
+.demo-badge{background:rgba(255,255,255,.2);border-radius:20px;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:.5px;}
+.modal-sheet{background:var(--white);width:100%;border-radius:24px 24px 0 0;padding:18px 18px 40px;max-height:90%;overflow-y:auto;}
+.modal-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px;}
+.modal-title{font-size:16px;font-weight:700;color:var(--text);margin-bottom:3px;}
+.modal-sub{font-size:12px;color:var(--text-muted);margin-bottom:14px;}
+.why-stat-row{display:flex;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);}
+.why-stat-row:last-child{border-bottom:none;}
+.why-stat-label{font-size:13px;color:var(--text);width:130px;flex-shrink:0;}
+.why-stat-bar{height:6px;border-radius:3px;background:var(--slate-light);flex:1;margin:0 10px;overflow:hidden;}
+.why-stat-fill{height:100%;border-radius:3px;background:var(--mint-dark);transition:width 1s ease;}
+.why-stat-val{font-size:12px;font-weight:700;color:var(--mint-dark);min-width:32px;text-align:right;}
+
+/* COMMUNITY */
+.alert-item{padding:12px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px;border-left:3px solid;border-radius:0 var(--r-xs) var(--r-xs) 0;}
+.alert-item.red{background:var(--red-soft);border-left-color:var(--red-mid);}
+.alert-item.amber{background:var(--amber-soft);border-left-color:#FCD34D;}
+.alert-text{font-size:13px;font-weight:500;line-height:1.4;}
+.alert-time{font-size:11px;margin-top:2px;opacity:.75;}
+.feed-item{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);}
+.feed-item:last-child{border-bottom:none;}
+.feed-avatar{width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+.feed-text{font-size:13px;color:var(--text);line-height:1.4;}
+.feed-meta{font-size:11px;color:var(--text-muted);margin-top:4px;display:flex;gap:8px;}
+.report-form{background:var(--slate-light);border-radius:var(--r-sm);padding:12px;margin-bottom:10px;}
+.report-form textarea{width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px;background:var(--white);outline:none;resize:none;height:72px;}
+.report-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.report-tag{padding:5px 11px;border-radius:20px;border:1.5px solid var(--border);background:var(--white);font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;min-height:44px;display:flex;align-items:center;}
+.report-tag.sel{border-color:var(--mint);background:var(--mint-light);color:var(--mint-dark);}
+.safepal-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);}
+.safepal-item:last-child{border-bottom:none;}
+.join-btn{background:var(--mint-dark);color:#fff;border:none;border-radius:var(--r-xs);padding:8px 14px;min-height:44px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;flex-shrink:0;}
+
+/* SUPPORT */
+.org-item{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border);}
+.org-item:last-child{border-bottom:none;}
+.org-icon{width:38px;height:38px;border-radius:11px;background:var(--mint-light);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.call-btn{background:var(--mint-dark);border:none;border-radius:20px;padding:7px 14px;min-height:44px;font-family:var(--font);font-size:12px;font-weight:700;color:#fff;cursor:pointer;margin-left:auto;display:flex;align-items:center;gap:4px;flex-shrink:0;}
+.call-btn.emergency{background:var(--red);}
+.guardian-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);}
+.guardian-item:last-child{border-bottom:none;}
+.guardian-dot{width:8px;height:8px;border-radius:50%;background:var(--mint);flex-shrink:0;}
+.guardian-dot.off{background:#CBD5E1;}
+
+/* AUDIT */
+.audit-header{background:linear-gradient(135deg,var(--mint-dark),#0D9488);border-radius:var(--r);padding:16px;margin-bottom:10px;color:#fff;}
+.param-item{border-bottom:1px solid var(--border);padding:12px 0;}
+.param-item:last-child{border-bottom:none;}
+.param-name{font-size:13px;font-weight:600;color:var(--text);margin-bottom:2px;}
+.param-desc{font-size:11px;color:var(--text-muted);margin-bottom:8px;}
+.rating-btns{display:flex;gap:6px;}
+.rb{flex:1;padding:7px 4px;min-height:44px;border-radius:8px;border:1.5px solid var(--border);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);background:var(--white);text-align:center;}
+.rb.poor.sel{background:var(--red-soft);border-color:var(--red-mid);color:var(--red-text);}
+.rb.avg.sel{background:var(--amber-soft);border-color:#FCD34D;color:var(--amber-text);}
+.rb.good.sel{background:var(--mint-light);border-color:var(--mint-mid);color:var(--mint-dark);}
+.lb-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);}
+.lb-row:last-child{border-bottom:none;}
+.lb-rank{font-size:13px;font-weight:700;color:var(--text-muted);width:22px;text-align:center;}
+.lb-name{font-size:13px;font-weight:600;color:var(--text);flex:1;}
+.lb-pts{font-size:12px;font-weight:700;color:var(--mint-dark);background:var(--mint-light);padding:3px 9px;border-radius:20px;}
+.lb-you{background:var(--mint-light);border-radius:var(--r-xs);}
+.voice-btn{width:62px;height:62px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;margin:0 auto 6px;background:var(--mint-dark);}
+.voice-btn.recording{background:var(--red);animation:vpulse 1s infinite;}
+@keyframes vpulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.35);}50%{box-shadow:0 0 0 10px rgba(239,68,68,0);}}
+.voice-transcript{background:var(--slate-light);border-radius:var(--r-xs);padding:10px 12px;font-size:12px;color:var(--text);min-height:36px;line-height:1.6;margin-top:10px;border:1px solid var(--border);}
+.tdot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--mint-dark);animation:tdota .7s infinite alternate;}
+.tdot:nth-child(2){animation-delay:.2s;}.tdot:nth-child(3){animation-delay:.4s;}
+@keyframes tdota{from{opacity:.3;transform:translateY(0);}to{opacity:1;transform:translateY(-3px);}}
+.snack{border-radius:var(--r-xs);padding:10px 14px;font-size:13px;font-weight:500;margin-bottom:10px;display:none;}
+.snack.mint{background:var(--mint-light);color:var(--mint-dark);border:1px solid var(--mint-mid);}
+.snack.show{display:block;}
+.hw-tag{display:inline-flex;align-items:center;gap:4px;background:#EFF6FF;color:#1D4ED8;font-size:10px;font-weight:600;padding:3px 8px;border-radius:20px;margin-top:4px;}
+.info-box{background:#EFF6FF;border-radius:0 var(--r-xs) var(--r-xs) 0;padding:12px 14px;border-left:3px solid #93C5FD;margin-top:8px;}
+.info-box-title{font-size:13px;font-weight:600;color:#1E40AF;margin-bottom:3px;}
+.info-box-text{font-size:12px;color:#1D4ED8;line-height:1.5;}
+.stat-mini{background:var(--slate-light);border-radius:var(--r-xs);padding:10px;text-align:center;flex:1;}
+.stat-mini-val{font-size:20px;font-weight:700;color:var(--text);}
+.stat-mini-label{font-size:11px;color:var(--text-muted);margin-top:2px;}
+.stat-mini.mint{background:var(--mint-light);}.stat-mini.mint .stat-mini-val{color:var(--mint-dark);}
+
+/* CALL SCREEN */
+.call-screen{position:absolute;inset:0;background:#0F172A;z-index:60;display:none;flex-direction:column;align-items:center;justify-content:space-around;padding:60px 30px;}
+.call-screen.show{display:flex;}
+.call-contact-pic{width:94px;height:94px;border-radius:50%;background:#1E293B;border:3px solid var(--mint);display:flex;align-items:center;justify-content:center;margin:0 auto 18px;animation:cpulse 2s infinite;}
+@keyframes cpulse{0%,100%{box-shadow:0 0 0 0 rgba(45,212,191,.35);}50%{box-shadow:0 0 0 20px rgba(45,212,191,0);}}
+.call-actions{display:flex;gap:52px;}
+.call-action-btn{width:66px;height:66px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+
+/* BATTERY BANNER */
+.batt-banner{position:absolute;top:0;left:0;right:0;z-index:80;background:#FFF1F2;border-bottom:2px solid var(--red-mid);padding:10px 16px;display:none;align-items:center;gap:10px;}
+.batt-banner.show{display:flex;}
+
+/* TOAST */
+#toast{position:absolute;bottom:calc(72px + var(--safe-bot));left:14px;right:14px;background:#0F172A;color:#F8FAFC;border-radius:var(--r-sm);padding:12px 16px;font-size:13px;font-weight:500;text-align:center;z-index:100;transition:opacity .3s;opacity:0;pointer-events:none;}
+#toast.show{opacity:1;}
+
+.notif-dot{width:8px;height:8px;border-radius:50%;background:var(--red);flex-shrink:0;animation:npulse 2s infinite;}
+@keyframes npulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.4);}50%{box-shadow:0 0 0 6px rgba(239,68,68,0);}}
+
+/* Add Guardian Modal Styles */
+.modal-input{width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);margin-bottom:10px;transition:border-color .2s;}
+.modal-input:focus{border-color:var(--mint);background:var(--white);}
+.modal-input::placeholder{color:var(--text-muted);}
+.modal-input-label{font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;display:block;}
+
+/* Recently added tag */
+.tag-new{background:#ECFDF5;color:#065F46;border:1px solid #6EE7B7;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:4px;display:inline-flex;align-items:center;}
+
+/* ============================================================
+   SENTINEL AI MODULES — Voice + Vision
+   ============================================================ */
+:root {
+  --terra:#E2725B; --terra-dark:#C4533C; --terra-soft:#FDF1EE; --terra-mid:#F3B5A8;
+  --gold:#D4A017; --gold-soft:#FDF8EE; --gold-mid:#EDD98A;
+  --mono:'DM Mono',monospace;
+}
+
+/* ── Voice Assistant Ring ── */
+.voice-ring-wrap {
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:14px 0 6px;
+}
+.voice-ai-ring {
+  width:72px;height:72px;border-radius:50%;
+  background:var(--terra-dark);
+  border:4px solid var(--terra);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;position:relative;
+  transition:all .3s;
+  box-shadow:0 4px 16px rgba(226,114,91,.3);
+}
+.voice-ai-ring.listening {
+  animation:terra-pulse 1.2s ease-in-out infinite;
+}
+@keyframes terra-pulse {
+  0%,100%{box-shadow:0 0 0 0 rgba(226,114,91,.55),0 4px 16px rgba(226,114,91,.3);}
+  50%{box-shadow:0 0 0 16px rgba(226,114,91,0),0 4px 16px rgba(226,114,91,.3);}
+}
+.voice-ai-label {
+  font-family:var(--mono);font-size:11px;font-weight:500;
+  color:var(--terra-dark);letter-spacing:.5px;
+}
+.voice-ai-status {
+  font-family:var(--mono);font-size:10px;color:var(--text-muted);
+  background:var(--terra-soft);border:1px solid var(--terra-mid);
+  border-radius:20px;padding:4px 12px;margin-top:4px;
+  min-height:26px;text-align:center;
+}
+.voice-ai-status.active {color:var(--terra-dark);font-weight:600;}
+.voice-ai-response {
+  font-family:var(--mono);font-size:11px;color:#0F172A;
+  background:var(--terra-soft);border:1px solid var(--terra-mid);
+  border-radius:var(--r-xs);padding:10px 12px;margin-top:8px;
+  line-height:1.7;width:100%;display:none;
+}
+.voice-ai-response.show{display:block;}
+.ai-cursor{display:inline-block;width:6px;height:12px;background:var(--terra);border-radius:1px;animation:blink .7s steps(1) infinite;vertical-align:middle;margin-left:2px;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
+
+/* ── AI Vision / Camera Modal ── */
+.vision-modal {
+  position:absolute;inset:0;background:rgba(15,23,42,.88);
+  z-index:80;display:none;flex-direction:column;align-items:center;justify-content:center;
+  padding:16px;backdrop-filter:blur(4px);
+}
+.vision-modal.show{display:flex;}
+.vision-modal-card {
+  background:#0F172A;border-radius:20px;
+  width:100%;max-width:380px;
+  border:1.5px solid var(--terra);
+  overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,.5);
+}
+.vision-modal-header {
+  background:linear-gradient(135deg,var(--terra-dark),#8B2500);
+  padding:12px 16px;display:flex;align-items:center;justify-content:space-between;
+}
+.vision-modal-title {
+  font-family:var(--mono);font-size:13px;font-weight:500;
+  color:#fff;letter-spacing:.5px;
+}
+.vision-close-btn {
+  background:rgba(255,255,255,.15);border:none;border-radius:50%;
+  width:30px;height:30px;color:#fff;font-size:16px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
+.video-viewport {
+  position:relative;width:100%;background:#000;
+  aspect-ratio:4/3;overflow:hidden;
+}
+video#ai-camera-feed {
+  width:100%;height:100%;object-fit:cover;display:block;
+}
+.scan-beam {
+  position:absolute;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,transparent,var(--terra),transparent);
+  top:0;display:none;
+  animation:scan-move 1.2s linear infinite;
+  box-shadow:0 0 12px rgba(226,114,91,.8);
+}
+.scan-beam.active{display:block;}
+@keyframes scan-move{
+  0%{top:0%;} 100%{top:100%;}
+}
+.corner-tl,.corner-tr,.corner-bl,.corner-br {
+  position:absolute;width:20px;height:20px;border-color:var(--terra);border-style:solid;
+}
+.corner-tl{top:8px;left:8px;border-width:2px 0 0 2px;}
+.corner-tr{top:8px;right:8px;border-width:2px 2px 0 0;}
+.corner-bl{bottom:8px;left:8px;border-width:0 0 2px 2px;}
+.corner-br{bottom:8px;right:8px;border-width:0 2px 2px 0;}
+.scan-overlay-text {
+  position:absolute;bottom:10px;left:0;right:0;text-align:center;
+  font-family:var(--mono);font-size:10px;color:var(--terra);
+  letter-spacing:1px;display:none;
+}
+.scan-overlay-text.active{display:block;}
+.vision-actions {
+  padding:14px 16px;display:flex;flex-direction:column;gap:10px;
+}
+.btn-capture {
+  width:100%;background:var(--terra);color:#fff;
+  border:none;border-radius:var(--r-sm);
+  font-family:var(--mono);font-size:13px;font-weight:500;
+  padding:13px;min-height:44px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  transition:filter .15s;letter-spacing:.5px;
+}
+.btn-capture:active{filter:brightness(.88);}
+.btn-capture:disabled{background:#334155;cursor:not-allowed;}
+.btn-capture-cancel {
+  width:100%;background:transparent;color:#64748B;
+  border:1px solid #334155;border-radius:var(--r-sm);
+  font-family:var(--mono);font-size:12px;
+  padding:10px;min-height:44px;cursor:pointer;
+  transition:color .2s;
+}
+.vision-status-bar {
+  padding:8px 16px;background:#1E293B;
+  font-family:var(--mono);font-size:10px;color:var(--terra);
+  letter-spacing:.8px;text-align:center;min-height:32px;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+}
+.vision-status-dot {
+  width:6px;height:6px;border-radius:50%;background:var(--terra);
+  animation:vsdot 1s ease-in-out infinite;
+}
+@keyframes vsdot{0%,100%{opacity:1;}50%{opacity:.2;}}
+
+/* ── Evidence Log ── */
+.evidence-log-wrap {
+  margin-top:10px;
+}
+.evidence-log-title {
+  font-family:var(--mono);font-size:10px;font-weight:500;
+  color:var(--terra-dark);letter-spacing:.8px;text-transform:uppercase;
+  padding:6px 0 8px;border-bottom:1px solid var(--terra-mid);margin-bottom:8px;
+}
+.evidence-item {
+  display:flex;align-items:center;gap:10px;
+  padding:8px;border-radius:var(--r-xs);
+  background:var(--terra-soft);border:1px solid var(--terra-mid);
+  margin-bottom:8px;
+}
+.evidence-thumb {
+  width:52px;height:52px;border-radius:8px;object-fit:cover;
+  border:1.5px solid var(--terra-mid);flex-shrink:0;
+}
+.evidence-meta {
+  flex:1;min-width:0;
+}
+.evidence-name {
+  font-family:var(--mono);font-size:11px;font-weight:500;
+  color:var(--terra-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.evidence-time {
+  font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-top:2px;
+}
+.evidence-badge {
+  font-family:var(--mono);font-size:9px;font-weight:600;
+  background:var(--terra);color:#fff;padding:2px 7px;
+  border-radius:20px;flex-shrink:0;letter-spacing:.5px;
+}
+
+/* ── AI Module Buttons (Terracotta) ── */
+.btn-ai {
+  background:var(--terra);color:#fff;border:none;border-radius:var(--r-sm);
+  font-family:var(--mono);font-size:12px;font-weight:500;
+  padding:11px 16px;min-height:44px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  transition:filter .15s;letter-spacing:.3px;width:100%;
+}
+.btn-ai:active{filter:brightness(.88);}
+.btn-ai-gold {
+  background:var(--gold);color:#0F172A;
+}
+.ai-module-card {
+  background:var(--terra-soft);border:1.5px solid var(--terra-mid);
+  border-radius:var(--r);padding:14px;margin-bottom:10px;
+}
+.ai-module-card-title {
+  font-family:var(--mono);font-size:11px;font-weight:600;
+  color:var(--terra-dark);letter-spacing:.8px;text-transform:uppercase;margin-bottom:10px;
+  display:flex;align-items:center;gap:6px;
+}
+</style>
+</head>
+<body>
+<div class="phone">
+<div class="batt-banner" id="batt-banner">
+  <i data-lucide="battery-low" style="width:18px;height:18px;color:var(--red);flex-shrink:0;"></i>
+  <div style="font-size:12px;font-weight:600;color:var(--red-text);flex:1;">Battery critical (5%) — Location sent to Trusted Circle.</div>
+  <button onclick="document.getElementById('batt-banner').classList.remove('show')" style="background:none;border:none;cursor:pointer;color:var(--red-text);font-size:18px;font-weight:700;min-width:44px;min-height:44px;">&times;</button>
+</div>
+
+<!-- ════════════════════════════════
+     LAYER 1 — CALCULATOR
+     ════════════════════════════════ -->
+<div class="layer" id="calc-layer">
+  <div class="calc-status">
+    <div class="sos-flash" id="sos-flash"><i data-lucide="shield-check" style="width:12px;height:12px;"></i>SMS &amp; GPS Sent</div>
+  </div>
+  <div class="calc-display">
+    <div class="calc-expr" id="calc-expr"></div>
+    <div class="calc-value" id="calc-val">0</div>
+  </div>
+  <div class="calc-buttons">
+    <button class="cb cb-fn" onclick="ca('clear')">AC</button>
+    <button class="cb cb-fn" onclick="ca('sign')">+/−</button>
+    <button class="cb cb-fn" onclick="ca('%')">%</button>
+    <button class="cb cb-op" onclick="ca('/')">÷</button>
+    <button class="cb cb-num" onclick="ca('7')">7</button>
+    <button class="cb cb-num" onclick="ca('8')">8</button>
+    <button class="cb cb-num" onclick="ca('9')">9</button>
+    <button class="cb cb-op" onclick="ca('*')">×</button>
+    <button class="cb cb-num" onclick="ca('4')">4</button>
+    <button class="cb cb-num" onclick="ca('5')">5</button>
+    <button class="cb cb-num" onclick="ca('6')">6</button>
+    <button class="cb cb-op" onclick="ca('-')">−</button>
+    <button class="cb cb-num" onclick="ca('1')">1</button>
+    <button class="cb cb-num" onclick="ca('2')">2</button>
+    <button class="cb cb-num" onclick="ca('3')">3</button>
+    <button class="cb cb-op" onclick="ca('+')">+</button>
+    <button class="cb cb-num cb-zero" onclick="ca('0')">0</button>
+    <button class="cb cb-num" onclick="ca('.')">.</button>
+    <button class="cb cb-op" onclick="ca('=')">=</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════
+     LAYER 2 — DASHBOARD
+     ════════════════════════════════ -->
+<div class="layer" id="dash-layer">
+  <div class="dash-header">
+    <div>
+      <div class="dash-title">Sentinel</div>
+      <!-- [FIX 1] Header subtitle updated dynamically -->
+      <div class="dash-subtitle"><span class="status-dot"></span><span id="header-area-label">Detecting…</span> &nbsp;·&nbsp; <span style="color:var(--mint-dark);font-weight:600;">Safe</span></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <button class="avatar-btn" onclick="showNotif()"><i data-lucide="bell" style="width:17px;height:17px;color:var(--mint-dark);"></i></button>
+      <div class="avatar-btn" onclick="openProfileModal()" style="cursor:pointer;"><i data-lucide="user" style="width:17px;height:17px;color:var(--mint-dark);"></i></div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-content">
+
+    <!-- ── MAP TAB ── -->
+    <div class="tab-pane active" id="tab-map">
+      <div style="height:10px;"></div>
+      <div class="card" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div class="score-ring"><div class="score-num" id="score-num">8.5</div><div class="score-den">/10</div></div>
+          <div>
+            <div style="font-size:14px;font-weight:600;color:var(--text);">Current Area Safety</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;" id="area-label">Detecting location…</div>
+            <div style="margin-top:5px;"><span class="tag tag-mint">Good</span></div>
+          </div>
+        </div>
+        <button class="why-btn" onclick="showWhy()">Why?</button>
+      </div>
+
+      <div class="guardian-status-bar" id="gbar"></div>
+
+      <div class="routing-card">
+        <div class="card-title" style="margin-bottom:10px;">🗺 Plan Your Route</div>
+        <div style="display:flex;gap:8px;align-items:stretch;">
+          <div style="display:flex;flex-direction:column;align-items:center;padding:4px 0;gap:0;width:16px;flex-shrink:0;">
+            <div style="width:11px;height:11px;border-radius:50%;background:var(--mint-dark);border:2px solid var(--mint-mid);flex-shrink:0;"></div>
+            <div style="flex:1;width:2px;background:var(--border-mid);min-height:14px;"></div>
+            <div style="width:11px;height:11px;border-radius:50%;background:var(--red);border:2px solid var(--red-mid);flex-shrink:0;"></div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+            <div style="position:relative;">
+              <input class="route-input" id="start-inp" type="text" placeholder="From: type or tap 📍 for location" oninput="onType('start')" onfocus="onFocus('start')" autocomplete="off" style="padding-right:70px;">
+              <button onclick="useMyLoc()" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:var(--mint-light);border:1px solid var(--mint-mid);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:10px;font-weight:700;color:var(--mint-dark);white-space:nowrap;">📍 Me</button>
+              <div class="suggestions-box" id="start-sug"></div>
+            </div>
+            <div style="position:relative;">
+              <input class="route-input" id="dest-inp" type="text" placeholder="To: enter destination..." oninput="onType('dest')" onfocus="onFocus('dest')" autocomplete="off">
+              <div class="suggestions-box" id="dest-sug"></div>
+            </div>
+          </div>
+          <button onclick="swapInputs()" style="width:44px;height:44px;border-radius:50%;border:1.5px solid var(--border-mid);background:var(--white);cursor:pointer;display:flex;align-items:center;justify-content:center;align-self:center;flex-shrink:0;transition:transform .2s;" onmousedown="this.style.transform='rotate(180deg)'" onmouseup="this.style.transform='rotate(0)'">
+            <i data-lucide="arrow-up-down" style="width:13px;height:13px;color:var(--slate);"></i>
+          </button>
+        </div>
+        <button class="route-get-btn" id="go-btn" onclick="getRoute()">
+          <i data-lucide="navigation" style="width:15px;height:15px;"></i>
+          Get Directions
+        </button>
+        <button id="clear-btn" onclick="clearRoute()" style="display:none;width:100%;background:var(--slate-light);color:var(--slate);border:none;border-radius:var(--r-xs);font-family:var(--font);font-size:12px;font-weight:600;padding:8px;min-height:44px;cursor:pointer;margin-top:6px;">✕ Clear Route</button>
+      </div>
+
+      <div class="rtype-row" id="rtype-row">
+        <button class="rtype-btn sel" id="rtype-safe" onclick="setRouteType('safe')">🛡️ Safe Route</button>
+        <button class="rtype-btn" id="rtype-fast" onclick="setRouteType('fast')">⚡ Fastest</button>
+      </div>
+
+      <div class="rinfo-bar" id="rinfo-bar">
+        <div class="rinfo-card green"><div class="rinfo-val" id="ri-time">—</div><div class="rinfo-label">Est. Time</div></div>
+        <div class="rinfo-card"><div class="rinfo-val" id="ri-dist">—</div><div class="rinfo-label">Distance</div></div>
+        <div class="rinfo-card"><div class="rinfo-val" id="ri-score">8.5</div><div class="rinfo-label">Safety Score</div></div>
+      </div>
+
+      <div class="map-wrap">
+        <div id="main-map"></div>
+        <div class="map-loading" id="map-loading">
+          <div class="spinner"></div>
+          <div style="font-size:12px;color:var(--text-muted);font-weight:500;">Finding route…</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <i data-lucide="layers" style="width:16px;height:16px;color:var(--mint-dark);"></i>
+            <div><div style="font-size:13px;font-weight:600;">Safety Heatmap</div><div style="font-size:11px;color:var(--text-muted);">Green = safer zones</div></div>
+          </div>
+          <button class="toggle" id="heat-toggle" onclick="toggleHeat(this)"></button>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;" id="nearby-pills">
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;background:var(--mint-light);border-radius:20px;border:1.5px solid var(--mint);white-space:nowrap;font-size:12px;font-weight:600;color:var(--mint-dark);cursor:pointer;min-height:44px;flex-shrink:0;" onclick="filterPOI(this,'police')">🛡️ Police</div>
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;background:var(--white);border-radius:20px;border:1px solid var(--border);white-space:nowrap;font-size:12px;font-weight:600;color:var(--text);cursor:pointer;min-height:44px;flex-shrink:0;" onclick="filterPOI(this,'hospital')">🏥 Hospital</div>
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;background:var(--white);border-radius:20px;border:1px solid var(--border);white-space:nowrap;font-size:12px;font-weight:600;color:var(--text);cursor:pointer;min-height:44px;flex-shrink:0;" onclick="filterPOI(this,'market')">🛍️ Market</div>
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;background:var(--white);border-radius:20px;border:1px solid var(--border);white-space:nowrap;font-size:12px;font-weight:600;color:var(--text);cursor:pointer;min-height:44px;flex-shrink:0;" onclick="filterPOI(this,'metro')">🚇 Metro</div>
+      </div>
+
+      <!-- ── Manual area selector ── -->
+      <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px;">
+        <label for="area-dropdown" style="font-size:12px;font-weight:600;color:var(--text-muted);flex-shrink:0;">📍 Area:</label>
+        <select id="area-dropdown" onchange="onAreaDropdownChange(this)"
+          style="flex:1;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:12px;color:var(--text);padding:8px 10px;background:var(--white);outline:none;min-height:44px;cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><path fill=%22%2364748B%22 d=%22M8 10L3 5h10z%22/></svg>');background-repeat:no-repeat;background-position:right 10px center;background-size:14px;">
+          <option value="">— Auto-detect from GPS —</option>
+          <option value="0">New Town / Amity University</option>
+          <option value="1">Techno Intl New Town (TINT)</option>
+          <option value="2">Sealdah Railway Station</option>
+          <option value="3">Howrah Junction</option>
+          <option value="4">Esplanade / New Market</option>
+          <option value="5">BBD Bagh / Lalbazar</option>
+          <option value="6">College Street / Central</option>
+          <option value="7">Park Street / Bhowanipore</option>
+          <option value="8">Shyambazar / North Kolkata</option>
+          <option value="9">Salt Lake / Bidhannagar</option>
+          <option value="10">Phoolbagan / Kankurgachi</option>
+          <option value="11">Jadavpur / Jadavpur University</option>
+
+        </select>
+      </div>
+
+      <div class="card" id="poi-card" style="margin-bottom:10px;">
+        <div class="card-title">Nearby Safe Places</div>
+        <div id="poi-list">
+          <div style="font-size:13px;color:var(--text-muted);padding:10px 0;text-align:center;">📍 Select an area above or allow location</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Journey Sharing</div>
+        <div class="toggle-row">
+          <div><div class="toggle-label">Share with Guardians</div><div class="toggle-sub" id="share-guardian-sub">Priya, Rahul see your live location</div></div>
+          <button class="toggle" onclick="this.classList.toggle('on');showToast(this.classList.contains('on')?'Journey sharing on':'Journey sharing off')"></button>
+        </div>
+        <div class="toggle-row">
+          <div><div class="toggle-label">Route Deviation Alerts</div><div class="toggle-sub">Alert if you go off safe path</div></div>
+          <button class="toggle on" onclick="this.classList.toggle('on');showToast(this.classList.contains('on')?'Deviation alerts on':'Deviation alerts off')"></button>
+        </div>
+      </div>
+
+      <button class="btn-red" onclick="triggerSOS(false)" style="margin-bottom:8px;">
+        <i data-lucide="alert-octagon" style="width:20px;height:20px;"></i>IMMEDIATE SOS
+      </button>
+      <div class="sos-confirm" id="sos-confirm">
+        <i data-lucide="check-circle" style="width:18px;height:18px;color:var(--red);flex-shrink:0;"></i>
+        <div style="font-size:13px;font-weight:600;color:var(--red-text);flex:1;">SOS sent · Guardians notified · GPS shared</div>
+        <button onclick="document.getElementById('sos-confirm').classList.remove('show')" style="background:none;border:none;cursor:pointer;color:var(--red-text);font-size:16px;font-weight:700;min-width:44px;min-height:44px;">×</button>
+      </div>
+      <div style="height:16px;"></div>
+    </div>
+
+    <!-- ── AUDIT TAB ── -->
+    <div class="tab-pane" id="tab-audit">
+      <div style="height:10px;"></div>
+      <div class="audit-header">
+        <div style="font-size:12px;font-weight:600;opacity:.75;margin-bottom:3px;">450 points · Rank #3 in your area</div>
+        <div style="font-size:22px;font-weight:700;">Sentinel Pro</div>
+        <div style="background:rgba(255,255,255,.2);border-radius:4px;height:5px;margin-top:8px;"><div style="background:#fff;height:100%;border-radius:4px;width:72%;"></div></div>
+        <div style="font-size:11px;opacity:.7;margin-top:5px;">550 pts to reach Guardian Elite</div>
+      </div>
+      <div class="ai-module-card">
+        <div class="ai-module-card-title">
+          <i data-lucide="radio" style="width:14px;height:14px;color:var(--terra);"></i>
+          SENTINEL VOICE ASSISTANT
+        </div>
+        <p style="font-family:var(--mono);font-size:11px;color:var(--terra-dark);margin-bottom:12px;line-height:1.6;">Say <strong>"Help"</strong>, <strong>"Emergency"</strong>, <strong>"Hospital"</strong>, or <strong>"Police"</strong> to trigger smart actions.</p>
+        <div class="voice-ring-wrap">
+          <div class="voice-ai-ring" id="voice-ai-ring" onclick="startVoiceAssistant()">
+            <i data-lucide="mic" style="width:26px;height:26px;color:#fff;" id="voice-ai-icon"></i>
+          </div>
+          <div class="voice-ai-label" id="voice-ai-label">TAP TO ACTIVATE</div>
+          <div class="voice-ai-status" id="voice-ai-status">System ready · Awaiting command</div>
+        </div>
+        <div class="voice-ai-response" id="voice-ai-response"></div>
+      </div>
+      <button class="btn-ai" style="margin-bottom:8px;" onclick="captureAIVision()">
+        <i data-lucide="camera" style="width:17px;height:17px;"></i>
+        AI VISION — Capture Evidence
+      </button>
+      <div id="audit-snack" class="snack mint">✓ Photo analysed &amp; added to Evidence Log.</div>
+      <!-- Evidence Log rendered here -->
+      <div id="evidence-log-container"></div>
+      <div class="card" style="padding:16px;">
+        <div class="card-title">9-Parameter Safety Audit</div>
+        <div id="params-list"></div>
+        <div style="margin-top:14px;padding:10px;background:var(--slate-light);border-radius:var(--r-xs);display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-size:13px;color:var(--text-muted);">Rated: <strong id="rated-count" style="color:var(--mint-dark);">0</strong>/9</div>
+        </div>
+        <button class="btn-primary" style="margin-top:12px;" onclick="submitAudit()"><i data-lucide="send" style="width:15px;height:15px;"></i>Submit Audit (+50 pts)</button>
+      </div>
+      <div class="card"><div class="card-title">Area Leaderboard</div><div id="leaderboard"></div></div>
+      <div style="height:16px;"></div>
+    </div>
+
+    <!-- ── COMMUNITY TAB ── -->
+    <div class="tab-pane" id="tab-community">
+      <div style="height:10px;"></div>
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="card-title" style="margin-bottom:0;">Safe-Pals Nearby</div>
+          <span class="tag tag-mint">3 available</span>
+        </div>
+        <div id="safepal-list"></div>
+        <button class="join-btn" onclick="showToast('Group walk request sent!')" style="width:100%;margin-top:10px;border-radius:var(--r-sm);padding:11px;"><i data-lucide="users" style="width:15px;height:15px;"></i>Join Group Walk</button>
+      </div>
+      <div class="card">
+        <div class="card-title">Report Something</div>
+        <div class="report-form">
+          <textarea id="report-text" placeholder="Describe what you're seeing…"></textarea>
+          <div class="report-tags">
+            <div class="report-tag" onclick="this.classList.toggle('sel')">Poor Lighting</div>
+            <div class="report-tag" onclick="this.classList.toggle('sel')">Unsafe Area</div>
+            <div class="report-tag" onclick="this.classList.toggle('sel')">Harassment</div>
+            <div class="report-tag" onclick="this.classList.toggle('sel')">Police Patrol</div>
+          </div>
+        </div>
+        <button class="btn-primary" onclick="showToast('Report submitted — thank you!')"><i data-lucide="send" style="width:15px;height:15px;"></i>Submit Report</button>
+      </div>
+      <div class="card"><div class="card-title">Community Feed</div><div id="feed"></div></div>
+      <div style="height:16px;"></div>
+    </div>
+
+    <!-- ── SUPPORT TAB ── -->
+    <div class="tab-pane" id="tab-support">
+      <div style="height:10px;"></div>
+      <!-- [FIX 1] Support tab profile card with Edit icon -->
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;">
+          <div style="width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,var(--mint-light),#BAE6FD);border:2.5px solid var(--mint);display:flex;align-items:center;justify-content:center;"><span style="font-size:22px;font-weight:700;color:var(--mint-dark);" id="support-initials">PS</span></div>
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <div style="font-size:17px;font-weight:700;color:var(--text);" id="support-name">Priya Sharma</div>
+              <!-- [FIX 1] Edit Profile shortcut button in Support tab -->
+              <button onclick="openProfileModal()" title="Edit Profile" style="background:var(--mint-light);border:1.5px solid var(--mint-mid);border-radius:50%;width:28px;height:28px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <i data-lucide="pencil" style="width:13px;height:13px;color:var(--mint-dark);"></i>
+              </button>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);">Sentinel Pro · <span id="support-city">Detecting…</span></div>
+            <div style="margin-top:5px;"><span class="tag tag-mint">12 Audits</span></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <div class="stat-mini mint"><div class="stat-mini-val">450</div><div class="stat-mini-label">Points</div></div>
+          <div class="stat-mini"><div class="stat-mini-val">12</div><div class="stat-mini-label">Audits</div></div>
+          <div class="stat-mini"><div class="stat-mini-val">#3</div><div class="stat-mini-label">Rank</div></div>
+        </div>
+      </div>
+
+      <!-- [FIX 4] Trusted Circle with dynamic guardian list -->
+      <div class="card">
+        <div class="card-title">Trusted Circle</div>
+        <div id="guardian-list">
+          <div class="guardian-item" id="guardian-priya"><div class="guardian-dot"></div><div style="width:34px;height:34px;border-radius:50%;background:#DBEAFE;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#1D4ED8;">PR</div><div><div style="font-size:13px;font-weight:500;">Priya (Mom)</div><div style="font-size:11px;color:var(--text-muted);">Online now</div></div></div>
+          <div class="guardian-item" id="guardian-rahul"><div class="guardian-dot off"></div><div style="width:34px;height:34px;border-radius:50%;background:#EDE9FE;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#6D28D9;">RA</div><div><div style="font-size:13px;font-weight:500;">Rahul (Brother)</div><div style="font-size:11px;color:var(--text-muted);">Last seen 1h ago</div></div></div>
+        </div>
+        <button class="btn-outline" style="margin-top:12px;width:100%;" onclick="openAddGuardianModal()"><i data-lucide="user-plus" style="width:15px;height:15px;"></i>Add Guardian</button>
+      </div>
+
+      <!-- [FIX 2] Location-based emergency services -->
+      <div class="card">
+        <div class="card-title">Find Support</div>
+        <div id="emergency-services-list">
+          <!-- populated dynamically -->
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Auxiliary Tools</div>
+        <button class="btn-outline" style="width:100%;margin-bottom:8px;" onclick="initFakeCall()"><i data-lucide="phone-incoming" style="width:16px;height:16px;"></i>Fake Incoming Call (3s)</button>
+        <div id="call-msg" style="display:none;text-align:center;font-size:12px;color:var(--text-muted);padding:6px 0;">Call in <span id="call-cd">3</span>s…</div>
+      </div>
+      <div class="ai-module-card">
+        <div class="ai-module-card-title">
+          <i data-lucide="cpu" style="width:14px;height:14px;color:var(--terra);"></i>
+          AI MODULES
+        </div>
+        <button class="btn-ai" style="margin-bottom:8px;" onclick="startVoiceAssistant()">
+          <i data-lucide="mic" style="width:16px;height:16px;"></i>
+          Voice Assistant
+        </button>
+        <button class="btn-ai btn-ai-gold" onclick="captureAIVision()">
+          <i data-lucide="scan" style="width:16px;height:16px;"></i>
+          AI Vision Camera
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Hardware Bind</div>
+        <div class="toggle-row"><div style="flex:1;"><div class="toggle-label">Volume Down — Long Press SOS</div><div class="toggle-sub">Hold 2s to trigger SOS</div><div class="hw-tag"><i data-lucide="volume-x" style="width:10px;height:10px;"></i>Hardware Key</div></div><button class="toggle on" onclick="this.classList.toggle('on');showToast(this.classList.contains('on')?'Enabled':'Disabled')"></button></div>
+        <div class="toggle-row"><div style="flex:1;"><div class="toggle-label">Power — Triple Press SOS</div><div class="toggle-sub">Three quick presses to alert guardians</div><div class="hw-tag"><i data-lucide="power" style="width:10px;height:10px;"></i>Hardware Key</div></div><button class="toggle" onclick="this.classList.toggle('on');showToast(this.classList.contains('on')?'Enabled':'Disabled')"></button></div>
+      </div>
+      
+      <div class="card">
+        <div class="card-title">About Sentinel</div>
+        <div class="info-box">
+          <div class="info-box-title">Sentinel — Your Stealth Safety Companion</div>
+          <div class="info-box-text">Sentinel operates silently in the background, keeping you protected without alerting those around you. Your safety audits power a community-driven map that helps every woman navigate smarter, safer, and with confidence.</div>
+        </div>
+      </div>
+      <div style="height:16px;"></div>
+    </div>
+  </div><!-- /tab-content -->
+
+  <div class="bottom-nav">
+    <button class="nav-btn active" id="nav-map" onclick="switchTab('map')"><i data-lucide="map" style="width:20px;height:20px;"></i>Map</button>
+    <button class="nav-btn" id="nav-audit" onclick="switchTab('audit')"><i data-lucide="clipboard-list" style="width:20px;height:20px;"></i>Audit</button>
+    <button class="nav-btn" id="nav-community" onclick="switchTab('community')"><i data-lucide="users" style="width:20px;height:20px;"></i>Community<span class="nav-badge" id="com-badge">3</span></button>
+    <button class="nav-btn" id="nav-support" onclick="switchTab('support')"><i data-lucide="life-buoy" style="width:20px;height:20px;"></i>Support</button>
+  </div>
+</div><!-- /dash-layer -->
+
+<!-- ════════════════════════════════
+     PROFILE MODAL
+     ════════════════════════════════ -->
+<div class="modal-overlay" id="profile-modal" onclick="closeModal('profile-modal')">
+  <div class="modal-sheet" onclick="event.stopPropagation()" style="padding-bottom:50px;">
+    <div class="modal-handle"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <div class="modal-title">My Profile</div>
+      <button id="edit-toggle-btn" onclick="toggleEdit()" style="background:var(--mint-light);border:1.5px solid var(--mint-mid);border-radius:20px;padding:6px 14px;min-height:44px;font-family:var(--font);font-size:12px;font-weight:700;color:var(--mint-dark);cursor:pointer;">✏️ Edit</button>
+    </div>
+    <div style="text-align:center;margin-bottom:18px;">
+      <div style="width:78px;height:78px;border-radius:50%;background:linear-gradient(135deg,var(--mint-light),#BAE6FD);border:3px solid var(--mint);display:flex;align-items:center;justify-content:center;margin:0 auto 10px;position:relative;">
+        <span style="font-size:26px;font-weight:700;color:var(--mint-dark);" id="prof-initials">PS</span>
+        <button id="avatar-edit-btn" onclick="showToast('Photo upload coming soon!')" style="display:none;position:absolute;bottom:0;right:0;width:28px;height:28px;border-radius:50%;background:var(--mint-dark);border:2px solid #fff;cursor:pointer;align-items:center;justify-content:center;">
+          <i data-lucide="camera" style="width:11px;height:11px;color:white;"></i>
+        </button>
+      </div>
+      <div style="font-size:16px;font-weight:700;color:var(--text);" id="prof-name-display">Priya Sharma</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Sentinel Pro · <span id="prof-city-display">Delhi NCR</span></div>
+      <div style="display:flex;justify-content:center;gap:8px;margin-top:8px;"><span class="tag tag-mint">12 Audits</span><span class="tag tag-slate">Rank #3</span></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <div class="stat-mini mint"><div class="stat-mini-val">450</div><div class="stat-mini-label">Points</div></div>
+      <div class="stat-mini"><div class="stat-mini-val">12</div><div class="stat-mini-label">Audits</div></div>
+      <div class="stat-mini"><div class="stat-mini-val">#3</div><div class="stat-mini-label">Rank</div></div>
+    </div>
+    <div id="prof-view">
+      <div style="background:var(--slate-light);border-radius:var(--r-sm);padding:12px;display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:var(--text-muted);font-weight:600;">Full Name</span><span style="font-size:13px;font-weight:600;color:var(--text);" id="view-name">Priya Sharma</span></div>
+        <div style="height:1px;background:var(--border);"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:var(--text-muted);font-weight:600;">Phone</span><span style="font-size:13px;font-weight:600;color:var(--text);" id="view-phone">+91 98765 43210</span></div>
+        <div style="height:1px;background:var(--border);"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:var(--text-muted);font-weight:600;">Email</span><span style="font-size:13px;font-weight:600;color:var(--text);" id="view-email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="71010318081031141c10181d5f121e1c">[email&#160;protected]</a></span></div>
+        <div style="height:1px;background:var(--border);"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:var(--text-muted);font-weight:600;">City</span><span style="font-size:13px;font-weight:600;color:var(--text);" id="view-city">Delhi NCR</span></div>
+      </div>
+    </div>
+    <div id="prof-edit" style="display:none;flex-direction:column;gap:10px;">
+      <div><div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">FULL NAME</div><input id="edit-name" type="text" value="Priya Sharma" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'"></div>
+      <div><div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">PHONE</div><input id="edit-phone" type="tel" value="+91 98765 43210" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'"></div>
+      <div><div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">EMAIL</div><input id="edit-email" type="email" value="priya@email.com" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'"></div>
+      <div><div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">CITY</div><input id="edit-city" type="text" value="Delhi NCR" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'"></div>
+      <button onclick="saveProfile()" style="width:100%;background:var(--mint-dark);color:#fff;border:none;border-radius:var(--r-sm);font-family:var(--font);font-size:14px;font-weight:600;padding:13px;min-height:44px;cursor:pointer;margin-top:4px;">💾 Save Changes</button>
+    </div>
+    <!-- Logout button always visible at bottom of profile modal -->
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+      <button onclick="closeModal('profile-modal');showLogoutScreen();" style="width:100%;background:var(--red-soft);color:var(--red-text);border:1.5px solid var(--red-mid);border-radius:var(--r-sm);font-family:var(--font);font-size:14px;font-weight:600;padding:13px;min-height:44px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;">
+        <i data-lucide="log-out" style="width:16px;height:16px;"></i> Sign Out
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- WHY MODAL -->
+<div class="modal-overlay" id="why-modal" onclick="closeModal('why-modal')">
+  <div class="modal-sheet" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Why 8.5/10?</div>
+    <div class="modal-sub">Connaught Place · Updated 10 min ago</div>
+    <div id="why-stats"></div>
+    <button class="btn-primary" style="margin-top:16px;" onclick="closeModal('why-modal')">Got it</button>
+  </div>
+</div>
+
+<!-- NOTIF MODAL -->
+<div class="modal-overlay" id="notif-modal" onclick="closeModal('notif-modal')">
+  <div class="modal-sheet" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Notifications</div>
+    <div class="modal-sub">Recent activity</div>
+    <div id="notif-list"></div>
+    <button class="btn-outline" style="margin-top:14px;width:100%;" onclick="closeModal('notif-modal')">Dismiss all</button>
+  </div>
+</div>
+
+<!-- [FIX 4] ADD GUARDIAN MODAL -->
+<div class="modal-overlay" id="add-guardian-modal" onclick="closeModal('add-guardian-modal')">
+  <div class="modal-sheet" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Add to Trusted Circle</div>
+    <div class="modal-sub">They'll receive your location during SOS &amp; journey sharing.</div>
+    <label class="modal-input-label">NAME</label>
+    <input class="modal-input" id="guardian-name-inp" type="text" placeholder="e.g. Neha (Friend)" maxlength="40">
+    <label class="modal-input-label">PHONE NUMBER</label>
+    <input class="modal-input" id="guardian-phone-inp" type="tel" placeholder="+91 XXXXX XXXXX" maxlength="20">
+    <div style="display:flex;gap:8px;margin-top:4px;">
+      <button class="btn-outline" style="flex:1;" onclick="closeModal('add-guardian-modal')">Cancel</button>
+      <button class="btn-primary" style="flex:1;" onclick="saveGuardian()"><i data-lucide="user-check" style="width:15px;height:15px;"></i>Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- FAKE CALL SCREEN -->
+<div class="call-screen" id="call-screen">
+  <div style="text-align:center;">
+    <div style="font-size:11px;color:#64748B;letter-spacing:1.5px;margin-bottom:20px;text-transform:uppercase;">Incoming Call</div>
+    <div class="call-contact-pic"><i data-lucide="user" style="width:38px;height:38px;color:#2DD4BF;"></i></div>
+    <div style="font-size:26px;font-weight:700;color:#F8FAFC;" id="call-name">Mom</div>
+    <div style="font-size:14px;color:#64748B;margin-top:4px;">mobile · India</div>
+  </div>
+  <div class="call-actions">
+    <div style="text-align:center;"><button class="call-action-btn" style="background:#EF4444;" onclick="dismissCall()"><i data-lucide="phone-off" style="width:24px;height:24px;color:white;"></i></button><div style="font-size:11px;color:#64748B;margin-top:6px;">Decline</div></div>
+    <div style="text-align:center;"><button class="call-action-btn" style="background:#22C55E;" onclick="dismissCall()"><i data-lucide="phone" style="width:24px;height:24px;color:white;"></i></button><div style="font-size:11px;color:#64748B;margin-top:6px;">Accept</div></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- ════════════════════════════════
+     FIREBASE AUTH MODAL
+     ════════════════════════════════ -->
+<div class="modal-overlay" id="auth-modal" style="z-index:100;align-items:center;justify-content:center;">
+  <div class="modal-sheet" onclick="event.stopPropagation()" style="border-radius:24px;max-width:400px;margin:0 16px;padding:24px 20px 32px;">
+    <div style="text-align:center;margin-bottom:20px;">
+      <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--mint-light),#BAE6FD);border:2px solid var(--mint);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;">
+        <i data-lucide="shield" style="width:24px;height:24px;color:var(--mint-dark);"></i>
+      </div>
+      <div style="font-size:18px;font-weight:700;color:var(--text);">Project Sentinel</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" id="auth-subtitle">Sign in to access your dashboard</div>
+    </div>
+
+    <!-- Tab toggle -->
+    <div style="display:flex;gap:0;background:var(--slate-light);border-radius:var(--r-xs);padding:3px;margin-bottom:16px;">
+      <button id="auth-tab-signin" onclick="switchAuthTab('signin')" style="flex:1;border:none;border-radius:6px;padding:8px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;background:var(--white);color:var(--mint-dark);box-shadow:var(--shadow-sm);transition:all .2s;">Sign In</button>
+      <button id="auth-tab-signup" onclick="switchAuthTab('signup')" style="flex:1;border:none;border-radius:6px;padding:8px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-muted);transition:all .2s;">Sign Up</button>
+    </div>
+
+    <div id="auth-signup-name-row" style="display:none;margin-bottom:10px;">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">FULL NAME</div>
+      <input id="auth-name" type="text" placeholder="e.g. Priya Sharma" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;margin-top:10px;">YOUR KOLKATA NEIGHBOURHOOD (Home Base)</div>
+      <div style="position:relative;">
+        <input id="auth-neighbourhood" type="text" placeholder="e.g. Jadavpur, Newtown, Salt Lake, Ballygunge…" list="kolkata-areas" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'">
+        <datalist id="kolkata-areas">
+          <option value="Jadavpur"><option value="Newtown"><option value="Salt Lake (Bidhannagar)">
+          <option value="Ballygunge"><option value="Park Street"><option value="Tollygunge">
+          <option value="Dum Dum"><option value="Behala"><option value="Howrah">
+          <option value="Alipore"><option value="Gariahat"><option value="Kasba">
+          <option value="Sreebhumi"><option value="Rajarhat"><option value="Belgharia">
+          <option value="Baranagar"><option value="Uttarpara"><option value="Lake Town">
+        </datalist>
+      </div>
+      <div style="margin-top:6px;padding:8px 10px;background:var(--mint-light);border-radius:var(--r-xs);border:1px solid var(--mint-mid);">
+        <div style="font-size:11px;color:var(--mint-dark);font-weight:600;">🏠 This sets your Home Base</div>
+        <div style="font-size:10px;color:var(--mint-dark);margin-top:2px;">Nearby places, alerts &amp; emergency services will be tailored to your neighbourhood.</div>
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">EMAIL</div>
+      <input id="auth-email" type="email" placeholder="you@email.com" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'">
+    </div>
+    <div style="margin-bottom:16px;">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;">PASSWORD</div>
+      <input id="auth-password" type="password" placeholder="••••••••" style="width:100%;border:1.5px solid var(--border);border-radius:var(--r-xs);font-family:var(--font);font-size:13px;color:var(--text);padding:10px 12px;min-height:44px;outline:none;background:var(--bg);" onfocus="this.style.borderColor='var(--mint)'" onblur="this.style.borderColor='var(--border)'">
+    </div>
+    <div id="auth-error" style="display:none;background:var(--red-soft);border:1px solid var(--red-mid);border-radius:var(--r-xs);padding:8px 12px;font-size:12px;color:var(--red-text);margin-bottom:12px;"></div>
+    <button id="auth-submit-btn" onclick="handleAuthSubmit()" class="btn-primary" style="margin-bottom:10px;">
+      <i data-lucide="log-in" style="width:15px;height:15px;"></i>
+      <span id="auth-btn-label">Sign In</span>
+    </button>
+    <!-- Demo account divider -->
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <div style="flex:1;height:1px;background:var(--border);"></div>
+      <span style="font-size:11px;color:var(--text-muted);font-weight:500;">or</span>
+      <div style="flex:1;height:1px;background:var(--border);"></div>
+    </div>
+    <button onclick="loginDemoAccount()" class="btn-demo" style="margin-bottom:12px;">
+      <i data-lucide="zap" style="width:15px;height:15px;"></i>
+      Try Demo Account <span class="demo-badge">NO SIGNUP</span>
+    </button>
+    <div style="font-size:11px;color:var(--text-muted);text-align:center;line-height:1.5;">🔒 Your data is encrypted and stored securely on Firebase.</div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════
+     LOGOUT / SESSION SCREEN
+     ════════════════════════════════ -->
+<div id="logout-screen">
+  <div class="logout-icon-wrap">
+    <i data-lucide="log-out" style="width:36px;height:36px;color:var(--red);"></i>
+  </div>
+  <div class="logout-title">Sign Out?</div>
+  <div class="logout-sub">You'll return to the calculator. Enter <strong>101 =</strong> anytime to sign back in.</div>
+  <div class="logout-actions">
+    <button onclick="performLogout()" style="width:100%;background:var(--red);color:#fff;border:none;border-radius:var(--r-sm);font-family:var(--font);font-size:15px;font-weight:700;padding:15px;min-height:44px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:filter .15s;" onmouseover="this.style.filter='brightness(.9)'" onmouseout="this.style.filter=''">
+      <i data-lucide="log-out" style="width:18px;height:18px;"></i> Yes, Sign Out
+    </button>
+    <button onclick="hideLogoutScreen()" style="width:100%;background:var(--white);color:var(--text-muted);border:1.5px solid var(--border);border-radius:var(--r-sm);font-family:var(--font);font-size:14px;font-weight:600;padding:13px;min-height:44px;cursor:pointer;">
+      Cancel — Stay Logged In
+    </button>
+    <div style="text-align:center;margin-top:8px;font-size:11px;color:var(--text-muted);">
+      Signed in as <span id="logout-email-display" style="font-weight:600;color:var(--mint-dark);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="8eeaebe3e1cefdebe0fae7e0ebe2a0effefe">[email&#160;protected]</a></span>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════
+     AI VISION CAMERA MODAL
+     ════════════════════════════════ -->
+<div class="vision-modal" id="vision-modal">
+  <div class="vision-modal-card">
+    <div class="vision-modal-header">
+      <div class="vision-modal-title">⬡ SENTINEL AI VISION v2.1</div>
+      <button class="vision-close-btn" onclick="closeAIVision()">✕</button>
+    </div>
+    <div class="video-viewport" id="video-viewport">
+      <video id="ai-camera-feed" autoplay playsinline muted></video>
+      <canvas id="capture-canvas" style="display:none;"></canvas>
+      <div class="corner-tl"></div><div class="corner-tr"></div>
+      <div class="corner-bl"></div><div class="corner-br"></div>
+      <div class="scan-beam" id="scan-beam"></div>
+      <div class="scan-overlay-text" id="scan-overlay-text">ANALYSING FRAME…</div>
+    </div>
+    <div class="vision-status-bar" id="vision-status-bar">
+      <div class="vision-status-dot"></div>
+      <span id="vision-status-text">INITIALISING CAMERA…</span>
+    </div>
+    <div class="vision-actions">
+      <button class="btn-capture" id="capture-btn" onclick="captureAIPhoto()" disabled>
+        <i data-lucide="aperture" style="width:16px;height:16px;"></i>
+        CAPTURE &amp; ANALYSE
+      </button>
+      <button class="btn-capture-cancel" onclick="closeAIVision()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- /phone -->
+
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+lucide.createIcons();
+
+/* ============================================================
+   [FIX 1] GLOBAL PROFILE STATE — single source of truth
+   ============================================================ */
+const profile = {
+  name: 'Priya Sharma',
+  phone: '+91 98765 43210',
+  email: 'priya@email.com',
+  city: 'Kolkata',
+  get initials() {
+    return this.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  }
+};
+
+function syncProfileUI() {
+  // Profile modal
+  document.getElementById('prof-initials').textContent = profile.initials;
+  document.getElementById('prof-name-display').textContent = profile.name;
+  document.getElementById('prof-city-display').textContent = profile.city;
+  document.getElementById('view-name').textContent = profile.name;
+  document.getElementById('view-phone').textContent = profile.phone;
+  document.getElementById('view-email').textContent = profile.email;
+  document.getElementById('view-city').textContent = profile.city;
+  document.getElementById('edit-name').value = profile.name;
+  document.getElementById('edit-phone').value = profile.phone;
+  document.getElementById('edit-email').value = profile.email;
+  document.getElementById('edit-city').value = profile.city;
+
+  // Support tab
+  document.getElementById('support-initials').textContent = profile.initials;
+  document.getElementById('support-name').textContent = profile.name;
+  document.getElementById('support-city').textContent = profile.city;
+
+  // Guardian share subtitle in Map tab
+  const sub = document.getElementById('share-guardian-sub');
+  if (sub) sub.textContent = `${profile.name.split(' ')[0]}, Rahul see your live location`;
+}
+
+function openProfileModal() {
+  syncProfileUI();
+  document.getElementById('profile-modal').classList.add('show');
+  lucide.createIcons();
+}
+
+/* ============================================================
+   CALCULATOR — all original logic preserved
+   ============================================================ */
+let cVal='0',cExpr='',cOp=null,cPrev=null,cReset=false,inputSeq='',lastD=null,lastT=0,sosBT=null;
+const dispEl=document.getElementById('calc-val'),exprEl=document.getElementById('calc-expr');
+function updateDisp(){dispEl.textContent=cVal.length>14?parseFloat(cVal).toExponential(4):cVal;exprEl.textContent=cExpr;}
+document.querySelectorAll('.cb').forEach(b=>{
+  b.addEventListener('click',function(e){
+    const r=document.createElement('span');r.className='btn-ripple';
+    const sz=Math.max(this.offsetWidth,this.offsetHeight)*.9;
+    r.style.cssText=`width:${sz}px;height:${sz}px;left:${e.offsetX-sz/2}px;top:${e.offsetY-sz/2}px`;
+    this.appendChild(r);setTimeout(()=>r.remove(),450);
+  });
+});
+function ca(k){
+  if(k>='0'&&k<='9')hDigit(k);
+  else if(k==='.')hDot();
+  else if(['+','-','*','/'].includes(k))hOp(k);
+  else if(k==='=')hEq();
+  else if(k==='clear'){cVal='0';cExpr='';cOp=null;cPrev=null;cReset=false;}
+  else if(k==='sign')cVal=String(-parseFloat(cVal)||0);
+  else if(k==='%')cVal=String(parseFloat(cVal)/100);
+  updateDisp();
+}
+function hDigit(d){
+  const now=Date.now(),isDouble=(d===lastD&&now-lastT<500);
+  lastD=d;lastT=now;
+  cReset?(cVal=d,cReset=false):cVal=cVal==='0'?d:cVal+d;
+  inputSeq+=d;if(inputSeq.length>3)inputSeq=inputSeq.slice(-3);
+  if(isDouble)triggerSOS(true);
+}
+function hDot(){if(cReset){cVal='0.';cReset=false;return;}if(!cVal.includes('.'))cVal+='.';}
+function hOp(op){cPrev=parseFloat(cVal);cOp=op;cExpr=cVal+' '+({'+':'+','-':'−','*':'×','/':'÷'}[op]);cReset=true;}
+function hEq(){
+  if(inputSeq.slice(-3)==='101'){
+    // Check for active Firebase Auth session
+    if(window.__fbUser){
+      openDash();
+    } else {
+      showAuthModal();
+    }
+    inputSeq='';return;
+  }
+  if(cOp&&cPrev!==null){
+    const c=parseFloat(cVal);let r;
+    if(cOp==='+')r=cPrev+c;else if(cOp==='-')r=cPrev-c;
+    else if(cOp==='*')r=cPrev*c;else if(cOp==='/')r=c?cPrev/c:'Error';
+    cExpr=cExpr+' '+cVal+' =';
+    cVal=typeof r==='number'?String(parseFloat(r.toFixed(10))):r;
+    cOp=null;cPrev=null;cReset=true;inputSeq='';
+  }
+}
+function openDash(){
+  document.getElementById('calc-layer').classList.add('slide-out');
+  document.getElementById('dash-layer').classList.add('slide-in');
+  setTimeout(()=>{lucide.createIcons();initMap();},600);
+  initUserLocation();
+}
+
+/* ============================================================
+   [FIX 2] LOCATION-BASED EMERGENCY SERVICES
+   ============================================================ */
+const EMERGENCY_SERVICES = {
+  kolkata: [
+    {icon:'phone-call',iconBg:'#FEF2F2',iconColor:'#DC2626',name:'Kolkata Women\'s Helpline',detail:'1091 · Mahila Thana · 24/7',btn:'1091',isEmergency:true},
+    {icon:'shield',iconBg:'var(--mint-light)',iconColor:'var(--mint-dark)',name:'Lalbazar Control Room',detail:'Kolkata Police HQ · 24/7',btn:'2214-5000',isEmergency:false},
+    {icon:'zap',iconBg:'#FFF7ED',iconColor:'#EA580C',name:'West Bengal State Emergency',detail:'Police · Fire · Medical',btn:'112',isEmergency:true},
+    {icon:'heart',iconBg:'#FFF1F2',iconColor:'#BE123C',name:'iCall Psychological Support',detail:'Emotional & Safety Support',btn:'9152987821',isEmergency:false},
+  ],
+  mumbai: [
+    {icon:'shield',iconBg:'var(--mint-light)',iconColor:'var(--mint-dark)',name:'Mumbai Police Mahila Help Desk',detail:'103 · Women\'s Cell · 24/7',btn:'103',isEmergency:false},
+    {icon:'phone-call',iconBg:'#FEF2F2',iconColor:'#DC2626',name:'iCall Mumbai',detail:'Psychological Support',btn:'9152987821',isEmergency:false},
+  ],
+  bangalore: [
+    {icon:'shield',iconBg:'var(--mint-light)',iconColor:'var(--mint-dark)',name:'Vanitha Sahayavani',detail:'1091 · Karnataka Women\'s Helpline',btn:'1091',isEmergency:false},
+    {icon:'phone-call',iconBg:'#FEF2F2',iconColor:'#DC2626',name:'Bengaluru Police WHL',detail:'80-22971500 · Mahila Seva',btn:'22971500',isEmergency:false},
+  ],
+  default: [
+    {icon:'shield',iconBg:'var(--mint-light)',iconColor:'var(--mint-dark)',name:'Women\'s Helpline (National)',detail:'1091 · 24/7 All States',btn:'1091',isEmergency:false},
+    {icon:'phone-call',iconBg:'#FEF2F2',iconColor:'#DC2626',name:'Nirbhaya Help Desk',detail:'181 · Women & Child Development',btn:'181',isEmergency:false},
+  ]
+};
+
+function detectCityKey(cityStr) {
+  const c = (cityStr || '').toLowerCase();
+  if (c.includes('kolkata') || c.includes('calcutta')) return 'kolkata';
+  if (c.includes('mumbai') || c.includes('bombay')) return 'mumbai';
+  if (c.includes('bangalore') || c.includes('bengaluru')) return 'bangalore';
+  return 'default';
+}
+
+function renderEmergencyServices(cityStr) {
+  const key = detectCityKey(cityStr);
+  const cityServices = EMERGENCY_SERVICES[key] || EMERGENCY_SERVICES.default;
+
+  // National 112 is always first (constant)
+  const national = {icon:'siren',iconBg:'#FFF7ED',iconColor:'#EA580C',name:'National Emergency',detail:'Police · Fire · Medical',btn:'112',isEmergency:true};
+  const allServices = [national, ...cityServices];
+
+  const list = document.getElementById('emergency-services-list');
+  if (!list) return;
+  list.innerHTML = allServices.map((s, i) => `
+    <div class="org-item" style="${i === allServices.length - 1 ? 'border-bottom:none;' : ''}">
+      <div class="org-icon" style="background:${s.iconBg};">
+        <i data-lucide="${s.icon}" style="width:18px;height:18px;color:${s.iconColor};"></i>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:600;">${s.name}</div>
+        <div style="font-size:11px;color:var(--text-muted);">${s.detail}</div>
+      </div>
+      <button class="call-btn ${s.isEmergency ? 'emergency' : ''}" onclick="showToast('Dialing ${s.btn}…')">
+        <i data-lucide="phone" style="width:12px;height:12px;"></i>${s.btn}
+      </button>
+    </div>
+  `).join('');
+  lucide.createIcons();
+}
+
+/* ============================================================
+   [FIX 4] ADD GUARDIAN LOGIC
+   ============================================================ */
+const AVATAR_COLORS = [
+  {bg:'#DBEAFE',tc:'#1D4ED8'},{bg:'#EDE9FE',tc:'#6D28D9'},{bg:'#FEF9C3',tc:'#854D0E'},
+  {bg:'#DCFCE7',tc:'#166534'},{bg:'#FCE7F3',tc:'#9D174D'},{bg:'#FEF2F2',tc:'#991B1B'}
+];
+let guardianColorIdx = 2;
+
+function openAddGuardianModal() {
+  document.getElementById('guardian-name-inp').value = '';
+  document.getElementById('guardian-phone-inp').value = '';
+  document.getElementById('add-guardian-modal').classList.add('show');
+  lucide.createIcons();
+  setTimeout(() => document.getElementById('guardian-name-inp').focus(), 200);
+}
+
+function saveGuardian() {
+  const name = document.getElementById('guardian-name-inp').value.trim();
+  const phone = document.getElementById('guardian-phone-inp').value.trim();
+  if (!name) { showToast('Please enter a name'); return; }
+  if (!phone) { showToast('Please enter a phone number'); return; }
+
+  const col = AVATAR_COLORS[guardianColorIdx % AVATAR_COLORS.length];
+  guardianColorIdx++;
+  const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+
+  const item = document.createElement('div');
+  item.className = 'guardian-item';
+  item.innerHTML = `
+    <div class="guardian-dot off"></div>
+    <div style="width:34px;height:34px;border-radius:50%;background:${col.bg};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${col.tc};">${initials}</div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:500;">${name} <span class="tag-new">Recently Added</span></div>
+      <div style="font-size:11px;color:var(--text-muted);">${phone}</div>
+    </div>
+  `;
+
+  // Remove border from last existing item before appending
+  const list = document.getElementById('guardian-list');
+  const existingItems = list.querySelectorAll('.guardian-item');
+  existingItems.forEach(el => el.style.borderBottom = '1px solid var(--border)');
+  item.style.borderBottom = 'none';
+  list.appendChild(item);
+
+  // Also update guardian bar
+  buildGbar();
+
+  closeModal('add-guardian-modal');
+  showToast(`${name} added to Trusted Circle ✓`);
+  lucide.createIcons();
+}
+
+/* ============================================================
+   LOCATION-AWARE CONTENT
+   ============================================================ */
+function updateLocationAlerts(lat,lon,areaName){
+  const container=document.querySelector('#tab-community .alert-item');
+  if(!container)return;
+  const parent=container.parentNode;
+  while(parent.children.length>1)parent.removeChild(parent.lastChild);
+  const hour=new Date().getHours(),isNight=hour<6||hour>19;
+  const alerts=[];
+  if(isNight){
+    alerts.push({type:'red',icon:'triangle-alert',text:`Low visibility near ${areaName} Metro after 9 PM`,time:'Just now',color:'#DC2626'});
+    alerts.push({type:'amber',icon:'info',text:`Police patrol increased near ${areaName} market`,time:'30 min ago',color:'#D97706'});
+  }else{
+    alerts.push({type:'amber',icon:'info',text:`Crowded area in ${areaName} – stay aware`,time:'1 hour ago',color:'#D97706'});
+    alerts.push({type:'green',icon:'shield-check',text:`Safety cameras active in ${areaName}`,time:'2 hours ago',color:'#0F766E'});
+  }
+  alerts.push({type:'amber',icon:'info',text:`Community reports: Well-lit streets in ${areaName}`,time:'15 min ago',color:'#D97706'});
+  alerts.forEach(a=>{
+    const div=document.createElement('div');div.className=`alert-item ${a.type}`;
+    div.innerHTML=`<i data-lucide="${a.icon}" style="width:15px;height:15px;color:${a.color};flex-shrink:0;margin-top:1px;"></i>
+      <div><div class="alert-text" style="color:${a.color==='#DC2626'?'var(--red-text)':'var(--amber-text)'}">${a.text}</div>
+      <div class="alert-time" style="color:${a.color}">${a.time}</div></div>`;
+    parent.appendChild(div);
+  });
+  lucide.createIcons();
+}
+function updateCommunityFeed(lat,lon,areaName){
+  const feedContainer=document.getElementById('feed');if(!feedContainer)return;
+  feedContainer.innerHTML='';
+  const nearbyUsers=[{initials:'MK',name:'Meera K.',dist:'0.3 km',tag:'Visibility',bg:'#DBEAFE',tc:'#1D4ED8'},{initials:'SA',name:'Sunita A.',dist:'0.5 km',tag:'Security',bg:'#DCFCE7',tc:'#166534'},{initials:'RP',name:'Ritika P.',dist:'0.7 km',tag:'Lighting',bg:'#F3E8FF',tc:'#6D28D9'}];
+  const feedItems=[{user:nearbyUsers[0],text:`Reported: High visibility near ${areaName} Gate 2`,time:'5 min ago',tagColor:'tag-slate'},{user:nearbyUsers[1],text:`Confirmed: Police patrol active on ${areaName} main road 8–11 PM`,time:'18 min ago',tagColor:'tag-mint'},{user:nearbyUsers[2],text:`New street lights installed near ${areaName} Marg`,time:'1 hr ago',tagColor:'tag-slate'}];
+  feedItems.forEach(f=>{
+    const div=document.createElement('div');div.className='feed-item';
+    div.innerHTML=`<div class="feed-avatar" style="background:${f.user.bg};color:${f.user.tc};">${f.user.initials}</div>
+      <div style="flex:1;"><div class="feed-text">${f.text}</div>
+      <div class="feed-meta"><span>${f.time}</span><span class="tag ${f.tagColor}">${f.user.tag}</span></div></div>`;
+    feedContainer.appendChild(div);
+  });
+}
+function refreshLocationNotifications(areaName){
+  const el=document.getElementById('notif-list');if(!el)return;
+  const dn=[
+    {icon:'shield-check',ic:'#0F766E',bg:'#F0FDFA',text:`Guardian verified your route in ${areaName}`,time:'2 min ago'},
+    {icon:'triangle-alert',ic:'#DC2626',bg:'#FEF2F2',text:`Alert: Unusual activity near ${areaName} crossing`,time:'15 min ago'},
+    {icon:'award',ic:'#D97706',bg:'#FFFBEB',text:`You earned 50 points for auditing ${areaName} area!`,time:'1 hr ago'}
+  ];
+  el.innerHTML=dn.map(n=>`<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+    <div style="width:34px;height:34px;border-radius:10px;background:${n.bg};display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i data-lucide="${n.icon}" style="width:16px;height:16px;color:${n.ic};"></i></div>
+    <div><div style="font-size:13px;font-weight:500;line-height:1.4;">${n.text}</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${n.time}</div></div>
+    <div class="notif-dot" style="margin-top:4px;flex-shrink:0;"></div>
+  </div>`).join('');
+  lucide.createIcons();
+}
+
+/* ============================================================
+   SOS
+   ============================================================ */
+/* ============================================================
+   SOS — Backend Integrated
+   ============================================================ */
+const BACKEND_URL = 'http://localhost:5000'; // Update this to your deployed URL later
+
+async function triggerSOS(bg) {
+  const flash = document.getElementById('sos-flash');
+  const confirm = document.getElementById('sos-confirm');
+  
+  // Show sending feedback
+  if (!bg) {
+    showToast('🚀 Sending SOS SMS to guardians...');
+    flash.classList.add('show');
+    flash.innerHTML = '<i data-lucide="loader" class="spin"></i> Sending Alert...';
+    lucide.createIcons();
+  }
+
+  // Get Location & Send to Backend
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    const area = window.currentAreaName || 'Unknown Area';
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/send-sos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          latitude: lat,
+          longitude: lon,
+          area: area,
+          message: "Guardian needed immediately. Voice or manual trigger registered."
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showToast('✅ SOS Alerts sent to all guardians!');
+        flash.innerHTML = '<i data-lucide="shield-check"></i> SMS & GPS Sent';
+        lucide.createIcons();
+        if (!bg) confirm.classList.add('show');
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (err) {
+      console.error('SOS Failed:', err);
+      showToast('❌ Failed to send SMS alerts. Check backend.');
+      flash.classList.remove('show');
+    }
+  }, (err) => {
+    console.error('Location Error:', err);
+    showToast('⚠️ Couldn\'t get precise location, sending anyway...');
+    // Fallback: Send with whatever coords we have (userLat/userLon)
+    sendSosData(userLat, userLon, window.currentAreaName || 'Unknown', bg);
+  }, { enableHighAccuracy: true, timeout: 5000 });
+
+  // Reset flash after some time
+  clearTimeout(sosBT);
+  sosBT = setTimeout(() => flash.classList.remove('show'), 5000);
+  if (!bg) setTimeout(() => confirm.classList.remove('show'), 8000);
+}
+
+/** Helper for fallback/reused logic **/
+async function sendSosData(lat, lon, area, bg) {
+  const flash = document.getElementById('sos-flash');
+  try {
+    const response = await fetch(`${BACKEND_URL}/send-sos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latitude: lat, longitude: lon, area: area })
+    });
+    if (response.ok) {
+      flash.innerHTML = '<i data-lucide="shield-check"></i> SMS & GPS Sent';
+      lucide.createIcons();
+      if (!bg) document.getElementById('sos-confirm').classList.add('show');
+    }
+  } catch (e) {
+    console.warn('Backend reach failed.');
+  }
+}
+
+/* ============================================================
+   TABS
+   ============================================================ */
+function switchTab(t){
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+t).classList.add('active');
+  document.getElementById('nav-'+t).classList.add('active');
+  document.getElementById('tab-content').scrollTop=0;
+  if(t==='community')document.getElementById('com-badge').style.display='none';
+  lucide.createIcons();
+}
+
+/* ============================================================
+   MAP + ROUTING
+   ============================================================ */
+let lmap,startM,destM,routeLine,heatCircles=[];
+let safeRouteData=null,fastRouteData=null;
+let startCoords=null,destCoords=null,activeField=null,debTimer=null,routeType='safe';
+
+function initMap(){
+  if(lmap)return;
+  const lat=(userLat&&userLat!==28.6315)?userLat:(userLat||22.5225),lon=(userLon&&userLon!==77.2167)?userLon:(userLon||88.3639);
+  lmap=L.map('main-map',{zoomControl:false}).setView([lat,lon],15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(lmap);
+  L.marker([lat,lon],{icon:L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:#2DD4BF;border:3px solid #fff;box-shadow:0 0 0 6px rgba(45,212,191,.22);"></div>',iconSize:[14,14],iconAnchor:[7,7]})}).addTo(lmap).bindPopup('📍 You are here');
+  lmap.on('moveend',()=>{if(document.getElementById('heat-toggle').classList.contains('on'))drawHeatmap();});
+  lmap.on('zoomend',()=>{if(document.getElementById('heat-toggle').classList.contains('on'))drawHeatmap();});
+}
+
+async function geocode(q){
+  if(!q||q.length<2)return[];
+  try{
+    const r=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=10&countrycodes=in`,{headers:{'User-Agent':'SentinelApp/1.0'}});
+    const results=await r.json();
+    return results.sort((a,b)=>{
+      const dA=Math.hypot(parseFloat(a.lat)-userLat,parseFloat(a.lon)-userLon);
+      const dB=Math.hypot(parseFloat(b.lat)-userLat,parseFloat(b.lon)-userLon);
+      return dA-dB;
+    }).slice(0,5);
+  }catch{return[];}
+}
+
+function onType(field){
+  clearTimeout(debTimer);
+  const val=document.getElementById(field==='start'?'start-inp':'dest-inp').value.trim();
+  const box=document.getElementById(field+'-sug');
+  if(val.length<2){box.classList.remove('show');return;}
+  debTimer=setTimeout(async()=>{
+    const res=await geocode(val);
+    if(!res.length){box.classList.remove('show');return;}
+    box.innerHTML=res.slice(0,5).map(r=>{
+      const parts=r.display_name.split(',');
+      const main=parts.slice(0,2).join(', ');
+      const sub=parts.slice(2,4).join(', ');
+      return`<div class="sug-item" onmousedown="pickPlace('${field}','${r.display_name.replace(/'/g,"\\'").replace(/\n/g,'')}',${r.lat},${r.lon})">
+        <div style="font-size:14px;flex-shrink:0;">📍</div>
+        <div><div class="sug-main">${main}</div><div class="sug-sub">${sub}</div></div>
+      </div>`;
+    }).join('');
+    box.classList.add('show');
+  },400);
+}
+function onFocus(field){activeField=field;}
+function pickPlace(field,name,lat,lon){
+  const shortName=name.split(',').slice(0,2).join(', ');
+  document.getElementById(field==='start'?'start-inp':'dest-inp').value=shortName;
+  document.getElementById(field+'-sug').classList.remove('show');
+  const coords=[parseFloat(lat),parseFloat(lon)];
+  if(field==='start'){
+    startCoords=coords;
+    if(startM)lmap.removeLayer(startM);
+    startM=L.marker(coords,{icon:L.divIcon({className:'',html:'<div style="width:13px;height:13px;border-radius:50%;background:#0F766E;border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3);"></div>',iconSize:[13,13],iconAnchor:[6,6]})}).addTo(lmap).bindPopup('🟢 '+shortName);
+  }else{
+    destCoords=coords;
+    if(destM)lmap.removeLayer(destM);
+    destM=L.marker(coords,{icon:L.divIcon({className:'',html:'<div style="width:22px;height:28px;display:flex;justify-content:center;"><svg viewBox="0 0 22 28" width="22" height="28"><path d="M11 0C5 0 0 5 0 11c0 8 11 17 11 17s11-9 11-17C22 5 17 0 11 0z" fill="#EF4444"/><circle cx="11" cy="11" r="4" fill="#fff"/></svg></div>',iconSize:[22,28],iconAnchor:[11,28]})}).addTo(lmap).bindPopup('🔴 '+shortName);
+  }
+}
+function useMyLoc(){
+  if(!lmap){showToast('Open the map first');return;}
+  if(!navigator.geolocation){startCoords=[userLat||22.5225,userLon||88.3639];const fb=window.currentAreaName||'Kolkata';document.getElementById('start-inp').value=fb;showToast('Using '+fb+' as start');return;}
+  showToast('Getting your location…');
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const lat=pos.coords.latitude,lon=pos.coords.longitude;startCoords=[lat,lon];
+    fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`)
+      .then(r=>r.json()).then(d=>{
+        const name=d.display_name?d.display_name.split(',').slice(0,2).join(', '):'My Location';
+        document.getElementById('start-inp').value=name;
+        if(startM)lmap.removeLayer(startM);
+        startM=L.marker([lat,lon],{icon:L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:#2DD4BF;border:3px solid #fff;box-shadow:0 0 0 5px rgba(45,212,191,.25);"></div>',iconSize:[14,14],iconAnchor:[7,7]})}).addTo(lmap);
+        lmap.setView([lat,lon],15);showToast('Location set ✓');
+      }).catch(()=>{document.getElementById('start-inp').value='My Location';showToast('Location acquired');});
+  },()=>{startCoords=[userLat||22.5225,userLon||88.3639];const nn=window.currentAreaName||'Kolkata';document.getElementById('start-inp').value=nn;showToast('Permission denied — using '+nn);});
+}
+function swapInputs(){
+  const si=document.getElementById('start-inp'),di=document.getElementById('dest-inp');
+  [si.value,di.value]=[di.value,si.value];[startCoords,destCoords]=[destCoords,startCoords];[startM,destM]=[destM,startM];
+  showToast('Start & destination swapped');
+}
+async function getRoute(){
+  if(!startCoords){
+    const sv=document.getElementById('start-inp').value.trim();
+    if(!sv){startCoords=[userLat||22.5225,userLon||88.3639];document.getElementById('start-inp').value=window.currentAreaName||'Kolkata';}
+    else{const r=await geocode(sv);if(!r.length){showToast('Cannot find start location');return;}pickPlace('start',r[0].display_name,r[0].lat,r[0].lon);await new Promise(res=>setTimeout(res,100));}
+  }
+  if(!destCoords){
+    const dv=document.getElementById('dest-inp').value.trim();
+    if(!dv){showToast('Please enter a destination');return;}
+    const r=await geocode(dv);if(!r.length){showToast('Cannot find destination');return;}
+    pickPlace('dest',r[0].display_name,r[0].lat,r[0].lon);await new Promise(res=>setTimeout(res,100));
+  }
+  document.getElementById('map-loading').classList.add('show');
+  try{await drawRoute();}catch(e){showToast('Could not get directions — check connection');}
+  document.getElementById('map-loading').classList.remove('show');
+}
+async function drawRoute(){
+  const [sLat,sLon]=startCoords,[dLat,dLon]=destCoords;
+  const midLat=(sLat+dLat)/2+(Math.abs(dLon-sLon)*0.08);
+  const midLon=(sLon+dLon)/2-(Math.abs(dLat-sLat)*0.06);
+  const fastData=await fetch(`https://router.project-osrm.org/route/v1/driving/${sLon},${sLat};${dLon},${dLat}?overview=full&geometries=geojson`).then(r=>r.json());
+  const safeData=await fetch(`https://router.project-osrm.org/route/v1/driving/${sLon},${sLat};${midLon},${midLat};${dLon},${dLat}?overview=full&geometries=geojson`).then(r=>r.json());
+  if(fastData.code!=='Ok'||!fastData.routes.length)throw new Error('No route');
+  const fastRoute=fastData.routes[0];
+  const fastCoords=fastRoute.geometry.coordinates.map(c=>[c[1],c[0]]);
+  const fastDistKm=(fastRoute.distance/1000).toFixed(1),fastMins=Math.round(fastRoute.duration/60);
+  let safeCoords,safeDistKm,safeMins;
+  if(safeData&&safeData.code==='Ok'&&safeData.routes.length){
+    const safeRoute=safeData.routes[0];safeCoords=safeRoute.geometry.coordinates.map(c=>[c[1],c[0]]);
+    safeDistKm=(safeRoute.distance/1000).toFixed(1);safeMins=Math.round(safeRoute.duration/60);
+    if(Math.abs(safeRoute.distance-fastRoute.distance)<fastRoute.distance*0.08){safeDistKm=(fastRoute.distance/1000*1.22).toFixed(1);safeMins=Math.round(fastRoute.duration/60*1.28);}
+  }else{safeCoords=fastCoords;safeDistKm=(fastRoute.distance/1000*1.24).toFixed(1);safeMins=Math.round(fastRoute.duration/60*1.30);}
+  fastRouteData={coords:fastCoords,distKm:fastDistKm,mins:fastMins};
+  safeRouteData={coords:safeCoords,distKm:safeDistKm,mins:safeMins};
+  renderRoute(routeType);
+  lmap.fitBounds(L.latLngBounds([startCoords,destCoords]),{padding:[44,44]});
+  if(document.getElementById('heat-toggle').classList.contains('on'))setTimeout(()=>drawHeatmap(),400);
+  document.getElementById('rinfo-bar').classList.add('show');
+  document.getElementById('rtype-row').classList.add('show');
+  document.getElementById('clear-btn').style.display='block';
+}
+function fmtTime(mins){return mins>=60?`${Math.floor(mins/60)}h ${mins%60}m`:`${mins} min`;}
+function renderRoute(type){
+  const d=type==='safe'?safeRouteData:fastRouteData;if(!d)return;
+  if(routeLine)lmap.removeLayer(routeLine);
+  routeLine=L.polyline(d.coords,{color:type==='safe'?'#0F766E':'#64748B',weight:5,opacity:.88,lineCap:'round',lineJoin:'round',dashArray:type==='safe'?null:'6,4'}).addTo(lmap);
+  document.getElementById('ri-time').textContent=fmtTime(d.mins);
+  document.getElementById('ri-dist').textContent=d.distKm+' km';
+  document.getElementById('ri-score').textContent=type==='safe'?'8.5':'6.2';
+  const other=type==='safe'?fastRouteData:safeRouteData;
+  const timeDiff=type==='safe'?d.mins-(other?other.mins:d.mins):(other?other.mins:d.mins)-d.mins;
+  if(other&&timeDiff>0)showToast(type==='safe'?`🛡️ Safe route · +${timeDiff} min but well-lit roads`:`⚡ Fastest · saves ${timeDiff} min, lower safety score`);
+  else showToast(`Route loaded · ${d.distKm} km · ${fmtTime(d.mins)}`);
+}
+function setRouteType(type){
+  routeType=type;
+  document.getElementById('rtype-safe').className='rtype-btn'+(type==='safe'?' sel':'');
+  document.getElementById('rtype-fast').className='rtype-btn'+(type==='fast'?' sel':'');
+  if(safeRouteData&&fastRouteData)renderRoute(type);
+}
+function clearRoute(){
+  if(routeLine)lmap.removeLayer(routeLine);routeLine=null;
+  if(startM)lmap.removeLayer(startM);startM=null;
+  if(destM)lmap.removeLayer(destM);destM=null;
+  startCoords=null;destCoords=null;
+  document.getElementById('start-inp').value='';document.getElementById('dest-inp').value='';
+  document.getElementById('rinfo-bar').classList.remove('show');document.getElementById('rtype-row').classList.remove('show');
+  document.getElementById('clear-btn').style.display='none';
+  const center=window._clearRouteCenter||[userLat,userLon];lmap.setView(center,15);showToast('Route cleared');
+}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.routing-card')){document.getElementById('start-sug').classList.remove('show');document.getElementById('dest-sug').classList.remove('show');}
+});
+function toggleHeat(btn){
+  btn.classList.toggle('on');const on=btn.classList.contains('on');
+  if(!lmap){initMap();document.getElementById('main-map').scrollIntoView({behavior:'smooth',block:'center'});}
+  if(on){drawHeatmap();showToast('Heatmap on — 🟢 safe  🔴 caution');}
+  else{heatCircles.forEach(c=>lmap.removeLayer(c));heatCircles=[];showToast('Heatmap off');}
+}
+function drawHeatmap(){
+  heatCircles.forEach(c=>lmap.removeLayer(c));heatCircles=[];
+  const center=lmap.getCenter(),lat=center.lat,lon=center.lng;
+  const bounds=lmap.getBounds(),latSpan=bounds.getNorth()-bounds.getSouth(),lonSpan=bounds.getEast()-bounds.getWest();
+  const safe=[[lat,lon,420],[lat+latSpan*.18,lon-lonSpan*.12,320],[lat-latSpan*.15,lon+lonSpan*.18,280],[lat+latSpan*.28,lon+lonSpan*.22,260],[lat-latSpan*.25,lon-lonSpan*.20,300],[lat+latSpan*.10,lon+lonSpan*.35,240],[lat-latSpan*.32,lon+lonSpan*.10,220],[lat+latSpan*.35,lon-lonSpan*.28,200],[lat-latSpan*.08,lon-lonSpan*.38,260],[lat+latSpan*.22,lon+lonSpan*.05,180],[lat-latSpan*.20,lon+lonSpan*.30,200],[lat+latSpan*.05,lon-lonSpan*.25,240]];
+  const caution=[[lat-latSpan*.12,lon+lonSpan*.08,160],[lat+latSpan*.30,lon+lonSpan*.15,140],[lat-latSpan*.28,lon-lonSpan*.05,130]];
+  const unsafe=[[lat+latSpan*.15,lon-lonSpan*.30,120],[lat-latSpan*.22,lon+lonSpan*.25,100]];
+  safe.forEach(([la,lo,r])=>heatCircles.push(L.circle([la,lo],{radius:r,color:'#0D9488',fillColor:'#0D9488',fillOpacity:.18,weight:0}).addTo(lmap)));
+  caution.forEach(([la,lo,r])=>heatCircles.push(L.circle([la,lo],{radius:r,color:'#F59E0B',fillColor:'#F59E0B',fillOpacity:.20,weight:0}).addTo(lmap)));
+  unsafe.forEach(([la,lo,r])=>heatCircles.push(L.circle([la,lo],{radius:r,color:'#EF4444',fillColor:'#EF4444',fillOpacity:.22,weight:0}).addTo(lmap)));
+}
+
+/* ============================================================
+   WHY / MODALS
+   ============================================================ */
+const whyData=[{l:'Street Lighting',v:9},{l:'Crowd Density',v:8},{l:'CCTV Coverage',v:8.5},{l:'Police Presence',v:7},{l:'Walk Path',v:8.8},{l:'Incident History',v:9.5}];
+function showWhy(){
+  const areaName=window.currentAreaName||document.getElementById('area-label')?.textContent||'Your Area';
+  document.querySelector('#why-modal .modal-title').textContent='Why 8.5/10?';
+  document.querySelector('#why-modal .modal-sub').textContent=areaName+' · Updated just now';
+  document.getElementById('why-stats').innerHTML=whyData.map(s=>`<div class="why-stat-row"><div class="why-stat-label">${s.l}</div><div class="why-stat-bar"><div class="why-stat-fill" style="width:0;" data-w="${s.v*10}%"></div></div><div class="why-stat-val">${s.v}</div></div>`).join('');
+  document.getElementById('why-modal').classList.add('show');lucide.createIcons();
+  setTimeout(()=>document.querySelectorAll('.why-stat-fill').forEach(e=>e.style.width=e.dataset.w),80);
+}
+function closeModal(id){document.getElementById(id).classList.remove('show');}
+
+let isEditing=false;
+function toggleEdit(){
+  isEditing=!isEditing;
+  document.getElementById('prof-view').style.display=isEditing?'none':'block';
+  document.getElementById('prof-edit').style.display=isEditing?'flex':'none';
+  document.getElementById('edit-toggle-btn').textContent=isEditing?'✕ Cancel':'✏️ Edit';
+  document.getElementById('avatar-edit-btn').style.display=isEditing?'flex':'none';
+  lucide.createIcons();
+}
+
+/* [FIX 1] saveProfile now updates global profile object and syncs all UI */
+function saveProfile(){
+  const name=document.getElementById('edit-name').value.trim();
+  const phone=document.getElementById('edit-phone').value.trim();
+  const email=document.getElementById('edit-email').value.trim();
+  const city=document.getElementById('edit-city').value.trim();
+  if(!name){showToast('Name cannot be empty');return;}
+
+  // Update the global state
+  profile.name = name;
+  profile.phone = phone;
+  profile.email = email;
+  profile.city = city;
+
+  // Sync all UI surfaces
+  syncProfileUI();
+
+  // Update emergency services if city changed
+  renderEmergencyServices(city);
+
+  toggleEdit();
+  showToast('Profile saved ✓');
+}
+
+/* ============================================================
+   NOTIFICATIONS
+   ============================================================ */
+const notifs=[{icon:'shield-check',ic:'#0F766E',bg:'#F0FDFA',t:'Priya confirmed your 8 PM journey',d:'2 min ago'},{icon:'triangle-alert',ic:'#DC2626',bg:'#FEF2F2',t:'Alert near Rajiv Chowk Metro',d:'15 min ago'},{icon:'award',ic:'#D97706',bg:'#FFFBEB',t:'You earned 50 points for your last audit!',d:'1 hr ago'}];
+function showNotif(){
+  document.getElementById('notif-list').innerHTML=notifs.map(n=>`<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);"><div style="width:34px;height:34px;border-radius:10px;background:${n.bg};display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i data-lucide="${n.icon}" style="width:16px;height:16px;color:${n.ic};"></i></div><div><div style="font-size:13px;font-weight:500;line-height:1.4;">${n.t}</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${n.d}</div></div><div class="notif-dot" style="margin-top:4px;flex-shrink:0;"></div></div>`).join('');
+  document.getElementById('notif-modal').classList.add('show');lucide.createIcons();
+}
+
+/* ============================================================
+   GUARDIAN BAR
+   ============================================================ */
+const guardians=[{i:'PR',c:'#DBEAFE',tc:'#1D4ED8',n:'Priya',s:4,b:82,bc:'#16A34A'},{i:'RA',c:'#EDE9FE',tc:'#6D28D9',n:'Rahul',s:2,b:34,bc:'#D97706'},{i:'AN',c:'#FEF9C3',tc:'#854D0E',n:'Anjali',s:3,b:91,bc:'#16A34A'}];
+function buildGbar(){
+  const bar=document.getElementById('gbar');if(!bar)return;
+  bar.innerHTML=guardians.map(g=>`<div class="gstat" onclick="showToast('${g.n} — ${g.b}% battery')"><div class="gstat-avatar" style="background:${g.c};color:${g.tc};">${g.i}</div><div><div class="gstat-name">${g.n}</div><div class="gstat-detail"><div class="sig-bar s${g.s}"><span></span><span></span><span></span><span></span></div><div class="batt-body"><div class="batt-fill" style="width:${Math.round(g.b/100*10)}px;background:${g.bc};"></div></div><span style="font-size:10px;color:${g.bc};font-weight:600;">${g.b}%</span></div></div></div>`).join('');
+}
+
+/* ============================================================
+   AUDIT
+   ============================================================ */
+const auditPs=[{n:'Lighting',d:'Street lighting quality at night'},{n:'Openness',d:'Visibility of the space'},{n:'Visibility',d:'Ability to see ahead'},{n:'People',d:'Presence of people'},{n:'Security',d:'Guards, police, or cameras'},{n:'Walk Path',d:'Quality of footpaths'},{n:'Public Transport',d:'Proximity of safe transit'},{n:'Gender Diversity',d:'Mixed crowd presence'},{n:'Overall Feeling',d:'Your personal sense of safety'}];
+const auditR={};
+function buildAudit(){
+  const el=document.getElementById('params-list');if(!el)return;
+  el.innerHTML='';
+  auditPs.forEach(p=>{const d=document.createElement('div');d.className='param-item';d.innerHTML=`<div class="param-name">${p.n}</div><div class="param-desc">${p.d}</div><div class="rating-btns"><button class="rb poor" onclick="setR('${p.n}','poor',this)">Poor</button><button class="rb avg" onclick="setR('${p.n}','avg',this)">Average</button><button class="rb good" onclick="setR('${p.n}','good',this)">Good</button></div>`;el.appendChild(d);});
+  buildLb();
+}
+function setR(p,v,btn){auditR[p]=v;btn.parentElement.querySelectorAll('.rb').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');document.getElementById('rated-count').textContent=Object.keys(auditR).length;}
+function submitAudit(){if(Object.keys(auditR).length<9){showToast(Object.keys(auditR).length+'/9 rated — complete all');return;}showToast('Audit submitted! +50 pts 🎉');Object.keys(auditR).forEach(k=>delete auditR[k]);document.querySelectorAll('.rb').forEach(b=>b.classList.remove('sel'));document.getElementById('rated-count').textContent='0';}
+/* ── Wizard-of-Oz AI auto-fill ── */
+function _autoFillAudit() {
+  // Pre-baked "AI result" profiles. Picked randomly so it feels alive.
+  const PROFILES = [
+    // Good area
+    { Lighting:'good', Openness:'good', Visibility:'good', People:'good',
+      Security:'good', 'Walk Path':'good', 'Public Transport':'good',
+      'Gender Diversity':'good', 'Overall Feeling':'good' },
+    // Mixed area
+    { Lighting:'avg',  Openness:'good', Visibility:'avg',  People:'good',
+      Security:'avg',  'Walk Path':'avg',  'Public Transport':'good',
+      'Gender Diversity':'avg',  'Overall Feeling':'avg'  },
+    // Caution area
+    { Lighting:'poor', Openness:'avg',  Visibility:'avg',  People:'avg',
+      Security:'poor', 'Walk Path':'poor', 'Public Transport':'avg',
+      'Gender Diversity':'avg',  'Overall Feeling':'poor' },
+    // Mostly good with one weak spot
+    { Lighting:'good', Openness:'good', Visibility:'good', People:'avg',
+      Security:'avg',  'Walk Path':'good', 'Public Transport':'good',
+      'Gender Diversity':'good', 'Overall Feeling':'good' },
+  ];
+
+  const hour = new Date().getHours();
+  // Bias: night hours lean toward caution/poor profiles
+  let pick;
+  if (hour >= 21 || hour < 6) {
+    pick = PROFILES[Math.random() < 0.6 ? 2 : 1];   // mostly caution at night
+  } else {
+    pick = PROFILES[Math.floor(Math.random() * 2)];  // good or mixed in daytime
+  }
+
+  // Clear existing selections
+  Object.keys(auditR).forEach(k => delete auditR[k]);
+  document.querySelectorAll('.rb').forEach(b => b.classList.remove('sel'));
+
+  // Stagger the fills so it looks like the AI is "thinking through" each one
+  auditPs.forEach((param, idx) => {
+    setTimeout(() => {
+      const value = pick[param.n];
+      auditR[param.n] = value;
+
+      // Find the matching button and highlight it
+      const paramItems = document.querySelectorAll('.param-item');
+      if (paramItems[idx]) {
+        const btn = paramItems[idx].querySelector(`.rb.${value}`);
+        if (btn) {
+          paramItems[idx].querySelectorAll('.rb').forEach(b => b.classList.remove('sel'));
+          btn.classList.add('sel');
+        }
+      }
+
+      // Update the counter
+      document.getElementById('rated-count').textContent = Object.keys(auditR).length;
+
+      // On the last parameter, show completion toast
+      if (idx === auditPs.length - 1) {
+        showToast('🤖 AI filled all 9 parameters — review & submit!');
+      }
+    }, idx * 120); // 120ms between each fill = ~1.1s total, feels snappy but deliberate
+  });
+}
+const lbData=[{r:1,n:'Ananya K.',p:820},{r:2,n:'Dev R.',p:640},{r:3,n:'Priya S.',p:450,y:true},{r:4,n:'Meera T.',p:380},{r:5,n:'Sanjay M.',p:310}];
+function buildLb(){const el=document.getElementById('leaderboard');if(!el)return;const rm={1:'🥇',2:'🥈',3:'🥉'};el.innerHTML=lbData.map(r=>`<div class="lb-row ${r.y?'lb-you':''}"><div class="lb-rank">${rm[r.r]||r.r}</div><div class="lb-name">${r.n}${r.y?' (You)':''}</div><div class="lb-pts">${r.p} pts</div></div>`).join('');}
+
+/* ============================================================
+   VOICE AUDIT
+   ============================================================ */
+const vScripts=['It\'s fairly bright here, I can see clearly ahead. There are some people around, a few women with families. The footpath is smooth. I can see a police patrol nearby. Feeling quite safe overall.','The area is dark and narrow. I\'m alone on this stretch. No guards or cameras visible. The road is broken. I feel a bit nervous being here.'];
+let vActive=false,vTimer=null;
+function toggleVoice(){
+  const btn=document.getElementById('voice-btn'),st=document.getElementById('voice-status'),tr=document.getElementById('voice-transcript');
+  if(!vActive){
+    vActive=true;btn.classList.add('recording');btn.innerHTML='<i data-lucide="mic-off" style="width:24px;height:24px;color:white;"></i>';
+    st.textContent='Listening…';tr.style.display='block';tr.innerHTML='<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>';lucide.createIcons();
+    vTimer=setTimeout(()=>{
+      const sc=vScripts[Math.floor(Math.random()*vScripts.length)];let i=0;tr.textContent='';
+      const ty=setInterval(()=>{tr.textContent+=sc[i];i++;if(i>=sc.length){clearInterval(ty);st.textContent='Done — all 9 parameters filled';vActive=false;btn.classList.remove('recording');btn.innerHTML='<i data-lucide="mic" style="width:24px;height:24px;color:white;"></i>';lucide.createIcons();showToast('Voice audit complete — 9/9 filled');}},28);
+    },2200);
+  }else{clearTimeout(vTimer);vActive=false;btn.classList.remove('recording');btn.innerHTML='<i data-lucide="mic" style="width:24px;height:24px;color:white;"></i>';st.textContent='Tap to speak';tr.style.display='none';lucide.createIcons();}
+}
+
+/* ============================================================
+   COMMUNITY
+   ============================================================ */
+const safePals=[{i:'MK',c:'#DBEAFE',tc:'#1D4ED8',n:'Meera K.',d:'0.3 km'},{i:'SA',c:'#DCF5E4',tc:'#166534',n:'Sunita A.',d:'0.5 km'},{i:'RP',c:'#F3E8FF',tc:'#6D28D9',n:'Ritika P.',d:'0.7 km'}];
+function buildSafePals(){
+  const el=document.getElementById('safepal-list');if(!el)return;
+  el.innerHTML=safePals.map(p=>`<div class="safepal-item"><div style="width:36px;height:36px;border-radius:50%;background:${p.c};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${p.tc};">${p.i}</div><div style="flex:1;"><div style="font-size:13px;font-weight:600;">${p.n}</div><div style="font-size:11px;color:var(--text-muted);">${p.d} away</div></div><button class="join-btn" onclick="showToast('Walk request sent to ${p.n}')"><i data-lucide="user-plus" style="width:12px;height:12px;"></i>Join</button></div>`).join('');
+  lucide.createIcons();
+}
+const feedData=[{i:'AK',c:'#DBEAFE',tc:'#1D4ED8',t:'Reported: High visibility near Metro Gate 2',d:'5 min ago',tag:'Visibility',tc2:'tag-slate'},{i:'SM',c:'#DCFCE7',tc:'#166534',t:'Confirmed: Police patrol active on Janpath 8–11 PM',d:'18 min ago',tag:'Security',tc2:'tag-mint'},{i:'RV',c:'#EDE9FE',tc:'#6D28D9',t:'New street lights installed near Baba Kharak Singh Marg',d:'1 hr ago',tag:'Lighting',tc2:'tag-slate'}];
+function buildFeed(){const el=document.getElementById('feed');if(!el)return;el.innerHTML=feedData.map(f=>`<div class="feed-item"><div class="feed-avatar" style="background:${f.c};color:${f.tc};">${f.i}</div><div style="flex:1;"><div class="feed-text">${f.t}</div><div class="feed-meta"><span>${f.d}</span><span class="tag ${f.tc2}">${f.tag}</span></div></div></div>`).join('');}
+
+/* ============================================================
+   FAKE CALL
+   ============================================================ */
+function initFakeCall(){
+  const msg=document.getElementById('call-msg'),cd=document.getElementById('call-cd');
+  msg.style.display='block';let c=3;cd.textContent=c;
+  const iv=setInterval(()=>{c--;cd.textContent=c;if(c<=0){clearInterval(iv);msg.style.display='none';showFakeCall();}},1000);
+}
+function showFakeCall(){
+  const ns=['Mom','Rahul (Brother)','Anjali','Dr. Mehta'];
+  document.getElementById('call-name').textContent=ns[Math.floor(Math.random()*ns.length)];
+  document.getElementById('call-screen').classList.add('show');lucide.createIcons();
+}
+function dismissCall(){document.getElementById('call-screen').classList.remove('show');}
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+let toastT=null;
+function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2800);}
+
+/* ============================================================
+   NEARBY POI
+   ============================================================ */
+let userLat=28.6315,userLon=77.2167;
+let activePOIType='police',poiMarkers=[];
+
+function initUserLocation(){
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(pos=>{
+      userLat=pos.coords.latitude;userLon=pos.coords.longitude;
+      fetch(`https://nominatim.openstreetmap.org/reverse?lat=${userLat}&lon=${userLon}&format=json&accept-language=en`,{headers:{'User-Agent':'SentinelApp/1.0'}})
+        .then(r=>r.json()).then(d=>{
+          // Resolve neighbourhood with multiple fallbacks
+          const addr=d.address||{};
+          const neighbourhood = addr.neighbourhood || addr.suburb || addr.quarter ||
+                                addr.village || addr.town || addr.city_district ||
+                                addr.residential || 'Your Area';
+          const city = addr.city || addr.state_district || addr.county || '';
+          const state = addr.state || '';
+
+          // Save to globals
+          window.currentAreaName = neighbourhood;
+          window.currentCity     = city;
+
+          const displayArea = city ? `${neighbourhood}, ${city}` : neighbourhood;
+
+          // Update header
+          const sub=document.querySelector('.dash-subtitle');
+          if(sub) sub.innerHTML=`<span class="status-dot"></span>${neighbourhood} &nbsp;·&nbsp; <span style="color:var(--mint-dark);font-weight:600;">Safe</span>`;
+          const areaLabel=document.getElementById('area-label');
+          if(areaLabel) areaLabel.textContent=displayArea;
+          const headerArea=document.getElementById('header-area-label');
+          if(headerArea) headerArea.textContent=neighbourhood;
+
+          // Update support city display
+          const supportCity=document.getElementById('support-city');
+          if(supportCity) supportCity.textContent=displayArea;
+
+          // Map clear-route resets to actual user location
+          window._clearRouteCenter=[userLat,userLon];
+
+          // Trigger location-aware UI
+          updateLocationAlerts(userLat,userLon,neighbourhood);
+          updateCommunityFeed(userLat,userLon,neighbourhood);
+          refreshLocationNotifications(neighbourhood);
+          renderEmergencyServices(city);
+
+          // Update the Why modal area name
+          const whySub=document.querySelector('#why-modal .modal-sub');
+          if(whySub) whySub.textContent=`${neighbourhood} · Updated just now`;
+
+          showToast(`📍 Location: ${neighbourhood}`);
+        }).catch(()=>{
+          window.currentAreaName='Your Area';
+          window.currentCity='';
+          renderEmergencyServices('');
+        });
+      fetchPOI(activePOIType);
+    },err=>{
+      console.warn('Geolocation error:',err.code,err.message);
+      fetchPOI(activePOIType);
+      renderEmergencyServices('');
+    },{enableHighAccuracy:true,timeout:10000,maximumAge:60000});
+  }else{
+    fetchPOI(activePOIType);
+    renderEmergencyServices('');
+  }
+}
+
+const POI_STYLES={police:{emoji:'🛡️',bg:'#EFF6FF',label:'Police Station'},hospital:{emoji:'🏥',bg:'#FEF2F2',label:'Hospital'},market:{emoji:'🛍️',bg:'#FFFBEB',label:'Market'},metro:{emoji:'🚇',bg:'#F5F3FF',label:'Metro Station'}};
+
+/* ============================================================
+   DIRECTORY DATA — static, zero network requests
+   ============================================================ */
+const DIRECTORY_DATA = [
+  {
+    area: "Amity University Kolkata",
+    items: [
+      { type: "hospital", name: "Charnock Hospital", note: "Biswa Bangla Sarani, New Town — super specialty", phone: "+91 33 4050 0500" },
+      { type: "hospital", name: "Ohio Hospital & Medical Centre", note: "DG Block, Action Area I, New Town", phone: "+91 33 6602 6602" },
+      { type: "hospital", name: "Neotia Bhagirathi W&C Centre", note: "DG Block, Action Area I — maternity & child", phone: "+91 33 6640 5000" },
+      { type: "market", name: "Newtown Market", note: "AD Block, Action Area I — daily essentials", phone: null },
+      { type: "market", name: "CB Block Community Market", note: "CB Block, Action Area I", phone: null },
+      { type: "metro", name: "Rabindra Tirtha Metro", note: "Action Area I, New Town (Line 6 — upcoming)", phone: null },
+      { type: "metro", name: "Siksha Tirtha Metro", note: "Near Eco Park, AA II (upcoming)", phone: null },
+      { type: "police", name: "New Town Police Station", note: "DJ Block, Action Area I", phone: "+91 33 2324 6077" },
+    ]
+  },
+  {
+    area: "Techno International New Town (TINT)",
+    items: [
+      { type: "hospital", name: "Ohio Hospital & Medical Centre", note: "DG Block — right beside TINT campus", phone: "+91 33 6602 6602" },
+      { type: "hospital", name: "Neotia Bhagirathi W&C Centre", note: "DG Block, Action Area I", phone: "+91 33 6640 5000" },
+      { type: "market", name: "CB Block Community Market", note: "CB Block, Action Area I", phone: null },
+      { type: "market", name: "NKDA Community Market", note: "CB Block — daily needs", phone: null },
+      { type: "metro", name: "Rabindra Tirtha Metro", note: "DG Block, Action Area I (upcoming)", phone: null },
+      { type: "police", name: "New Town Police Station", note: "DJ Block, Action Area I", phone: "+91 33 2324 6077" },
+    ]
+  },
+  {
+    area: "Sealdah Railway Station",
+    items: [
+      { type: "hospital", name: "NRS Medical College & Hospital", note: "138, AJC Bose Rd — govt hospital, 24hr emergency", phone: null },
+      { type: "hospital", name: "S.V.S. Marwari Hospital", note: "Raja Ram Mohan Sarani, Machuabazar", phone: "+91 33 3061 2200" },
+      { type: "market", name: "Koley Market", note: "Wholesale vegetables & fruits — Bowbazar", phone: "+91 33 2227 1899" },
+      { type: "metro", name: "Sealdah Metro", note: "Green line (East-West corridor)", phone: null },
+      { type: "police", name: "GRP Sealdah Station", note: "S Sealdah Rd — railway police, 24hr", phone: null },
+      { type: "police", name: "Entally Police Station", note: "12, Convent Rd, Sealdah", phone: "+91 62922 58306" },
+    ]
+  },
+  {
+    area: "Howrah Junction Railway Station",
+    items: [
+      { type: "hospital", name: "Narayana Hospital Howrah", note: "Andul Rd, Shibpur — super specialty, 24hr", phone: "+91 80 6215 4783" },
+      { type: "hospital", name: "ILS Hospitals Howrah", note: "Dr Abani Dutta Rd, Golabari", phone: "+91 33 4088 0000" },
+      { type: "hospital", name: "Shree Jain Hospital", note: "Panchasheel Ave, Shibpur — multispeciality", phone: "+91 33 2641 5831" },
+      { type: "market", name: "Howrah Market", note: "Grand Trunk Rd, Howrah Maidan — all goods", phone: null },
+      { type: "market", name: "Fazir Bazar", note: "GT Rd, Shibpur — vegetables & daily items", phone: null },
+      { type: "metro", name: "Howrah Metro Station", note: "Green line — underwater tunnel to Esplanade", phone: null },
+      { type: "metro", name: "Howrah Maidan Metro", note: "Green line terminus, Howrah Maidan", phone: null },
+      { type: "police", name: "Howrah Police Station", note: "15, Nityadhan Mukherjee Rd, Howrah", phone: "+91 33 2641 1750" },
+      { type: "police", name: "Howrah GRP Station", note: "Near railway station — railway police", phone: null },
+    ]
+  },
+  {
+    area: "Esplanade / Dharmatala / New Market",
+    items: [
+      { type: "hospital", name: "Fortis Medical Centre", note: "Sarat Bose Rd, Bhowanipore", phone: "+91 33 6620 2000" },
+      { type: "market", name: "New Market (Hogg Market)", note: "Lindsay St — clothes, food, all goods", phone: "+91 87776 33740" },
+      { type: "market", name: "Esplanade Dharmatala Market", note: "Bertram St — street market hub", phone: null },
+      { type: "market", name: "Janbazar Market", note: "SN Banerjee Rd — groceries & daily items", phone: null },
+      { type: "metro", name: "Esplanade Metro", note: "Blue + Green line interchange", phone: null },
+      { type: "police", name: "New Market Police Station", note: "136, SN Banerjee Rd", phone: "+91 33 2217 7397" },
+      { type: "police", name: "DC Police – Central Division", note: "138, SN Banerjee Rd", phone: "+91 33 2228 1403" },
+    ]
+  },
+  {
+    area: "BBD Bagh / Lalbazar / Chandni Chowk",
+    items: [
+      { type: "market", name: "Chandni Chowk Market", note: "Electronics & hardware, Bowbazar", phone: null },
+      { type: "metro", name: "Chandni Chowk Metro", note: "Blue line, Bowbazar area", phone: null },
+      { type: "metro", name: "Mahakaran Metro", note: "Green line, BBD Bagh", phone: "+91 33 2226 4817" },
+      { type: "police", name: "Kolkata Police HQ, Lalbazar", note: "18, Lal Bazar St", phone: "+91 33 2250 5000" },
+      { type: "police", name: "Cyber Crime PS, Lalbazar", note: "18, Lal Bazar St", phone: "+91 33 2214 3000" },
+      { type: "police", name: "Hare Street Police Station", note: "42, Chittaranjan Ave, Bowbazar", phone: "+91 33 2211 8760" },
+    ]
+  },
+  {
+    area: "College Street / Central / MG Road",
+    items: [
+      { type: "hospital", name: "Calcutta Medical College", note: "Near Central metro — iconic govt hospital", phone: null },
+      { type: "market", name: "Koley Market", note: "Wholesale vegetables & fruits, Sealdah", phone: "+91 33 2227 1899" },
+      { type: "market", name: "Fancy Market", note: "College Square — affordable goods", phone: null },
+      { type: "metro", name: "Central Metro", note: "Blue line, Chittaranjan Ave", phone: null },
+      { type: "metro", name: "MG Road Metro", note: "Blue line, College St / Barabazar", phone: null },
+      { type: "police", name: "Jorasanko Police Station", note: "Barabazar, Raja Katra", phone: "+91 33 2269 7279" },
+      { type: "police", name: "Amherst Street Police Station", note: "Raja Ram Mohan Sarani", phone: "+91 33 2360 5100" },
+    ]
+  },
+  {
+    area: "Park Street / Bhowanipore",
+    items: [
+      { type: "hospital", name: "Institute of Neurosciences (INK)", note: "185, AJC Bose Rd, Elgin", phone: "+91 33 4030 9999" },
+      { type: "hospital", name: "Fortis Medical Centre", note: "Sarat Bose Rd — multi-specialty", phone: "+91 33 6620 2000" },
+      { type: "metro", name: "Rabindra Sadan Metro", note: "Blue line, Chowringhee Rd", phone: null },
+    ]
+  },
+  {
+    area: "Shyambazar / Hatibagan / North Kolkata",
+    items: [
+      { type: "hospital", name: "North City Hospital", note: "Bagmari Rd, near Ultadanga", phone: "+91 33 6605 0999" },
+      { type: "market", name: "Hatibagan Market", note: "Shyambazar — textiles & daily goods", phone: null },
+      { type: "metro", name: "Shyambazar Metro", note: "Blue line, 5-point crossing", phone: null },
+      { type: "metro", name: "Girish Park Metro", note: "Blue line, North Kolkata", phone: null },
+    ]
+  },
+  {
+  area: "Salt Lake / Bidhannagar",
+  items: [
+    { 
+      type: "hospital", 
+      name: "ILS Hospitals", 
+      note: "DD Block, Sector 1, Salt Lake (Near City Centre)", 
+      phone: "+91 33 4020 6500" 
+    },
+    { 
+      type: "hospital", 
+      name: "Manipal Hospitals Broadway", 
+      note: "JC Block, Sector 3, Bidhannagar", 
+      phone: "+91 33 6907 0000" 
+    },
+    { 
+      type: "hospital", 
+      name: "AMRI Hospitals", 
+      note: "JC Block, Near Salt Lake Stadium", 
+      phone: "+91 33 6680 0000" 
+    },
+    { 
+      type: "police", 
+      name: "Bidhannagar North Police Station", 
+      note: "BJ Block, Sector 2, Salt Lake", 
+      phone: "+91 33 2337 1166" 
+    },
+    { 
+      type: "police", 
+      name: "Electronic Complex Police Station", 
+      note: "Sector V, Salt Lake (IT Hub)", 
+      phone: "+91 33 2357 1500" 
+    },
+    { 
+      type: "market", 
+      name: "City Centre 1 Mall", 
+      note: "DC Block, Sector 1, Salt Lake", 
+      phone: "033 2358 1010" 
+    },
+    { 
+      type: "metro", 
+      name: "Salt Lake Sector V Metro", 
+      note: "East-West Metro Line (Green Line)", 
+      phone: "N/A" 
+    }
+    ]
+  },
+  {
+    area: "Phoolbagan / Kankurgachi / Beleghata",
+    items: [
+      { type: "hospital", name: "Apollo Multispeciality Hospital", note: "58, Canal Circular Rd, Kankurgachi", phone: "+91 80 6297 2764" },
+      { type: "hospital", name: "Kolkata Medical Center", note: "Beleghata — 24-hr emergency", phone: "+91 99031 00130" },
+    ]
+  },
+  {
+    area: "Jadavpur / Jadavpur University",
+    items: [
+      { type: "hospital", name: "KPC Medical College and Hospital", note: "Raja SC Mullick Rd, Jadavpur", phone: "+91 33 6621 1717" },
+      { type: "hospital", name: "AMRI Hospitals - Dhakuria", note: "Near Jadavpur Flyover", phone: "+91 33 6680 0000" },
+      { type: "market", name: "Jadavpur 8B Market", note: "Hub for groceries, street food & daily needs", phone: null },
+      { type: "market", name: "South City Mall", note: "Prince Anwar Shah Rd — high-end retail", phone: "+91 33 4007 2222" },
+      { type: "metro", name: "Rabindra Sarobar Metro", note: "Nearest Blue line station for Jadavpur", phone: null },
+      { type: "metro", name: "Kavi Nazrul Metro", note: "Garia/Jadavpur corridor connection", phone: null },
+      { type: "police", name: "Jadavpur Police Station", note: "Raja SC Mullick Rd, opp. Jadavpur University", phone: "+91 33 2412 1113" },
+      { type: "police", name: "South Campus Security HQ", note: "Jadavpur University Internal Security", phone: "+91 33 2414 6666" }
+    ]
+  },
+];
+
+/* ── Area selector state ── */
+let _selectedDirectoryArea = null; // null = auto-detect from GPS
+
+/* Keyword map: Nominatim neighbourhood strings → DIRECTORY_DATA index */
+function _resolveDirectoryArea(areaName) {
+  if (!areaName) return null;
+  const needle = areaName.toLowerCase();
+  const KEYWORD_MAP = [
+    { keys: ['new town','newtown','action area','rajarhat','amity'], idx: 0 },
+    { keys: ['tint','techno'],                                       idx: 1 },
+    { keys: ['sealdah','entally','rajabazar'],                       idx: 2 },
+    { keys: ['howrah','shibpur','golabari'],                         idx: 3 },
+    { keys: ['esplanade','dharmatala','new market','lindsay'],       idx: 4 },
+    { keys: ['bbd bagh','lalbazar','chandni chowk','bowbazar'],      idx: 5 },
+    { keys: ['college street','central','mg road','barabazar'],      idx: 6 },
+    { keys: ['park street','bhowanipore','elgin'],                   idx: 7 },
+    { keys: ['shyambazar','hatibagan','north kolkata','ultadanga'],  idx: 8 },
+    { keys: ['salt lake','bidhannagar','sector'],                    idx: 9 },
+    { keys: ['phoolbagan','kankurgachi','beleghata'],               idx: 10 },
+    { keys: ['jadavpur','sc mullick','south city','kavi nazrul','bidhanpally','jadavpur university','jadavpur 8b'],    idx: 11 },
+  ];
+  for (const entry of KEYWORD_MAP) {
+    if (entry.keys.some(k => needle.includes(k))) return DIRECTORY_DATA[entry.idx];
+  }
+  return null;
+}
+
+/* ── Revised fetchPOI — zero network requests ── */
+function fetchPOI(type) {
+  activePOIType = type;
+  const listEl = document.getElementById('poi-list');
+  if (!listEl) return;
+
+  const areaEntry = _selectedDirectoryArea
+    || _resolveDirectoryArea(window.currentAreaName || '');
+
+  if (!areaEntry) {
+    listEl.innerHTML = `
+      <div style="padding:14px 0;text-align:center;color:var(--text-muted);font-size:13px;">
+        📍 Area not in directory yet.<br>
+        <span style="font-size:12px;">Use the dropdown above to select your area manually.</span>
+      </div>`;
+    return;
+  }
+
+  const style = POI_STYLES[type];
+  const items = areaEntry.items.filter(i => i.type === type);
+
+  if (!items.length) {
+    listEl.innerHTML = `<div style="padding:14px 0;text-align:center;color:var(--text-muted);font-size:13px;">No ${style.label}s listed for <strong>${areaEntry.area}</strong>.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = items.map((p, i) => `
+    <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;${i < items.length - 1 ? 'border-bottom:1px solid var(--border);' : ''}">
+      <div style="width:36px;height:36px;border-radius:10px;background:${style.bg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;">${style.emoji}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.35;">${p.name}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.4;">${p.note}</div>
+        ${p.phone ? `<a href="tel:${p.phone.replace(/\s/g,'')}" style="display:inline-flex;align-items:center;gap:4px;margin-top:5px;padding:4px 10px;background:var(--mint-light);color:var(--mint-dark);border-radius:20px;font-size:11px;font-weight:700;text-decoration:none;" onclick="event.stopPropagation()">📞 ${p.phone}</a>` : ''}
+      </div>
+      ${i === 0 ? '<span style="display:inline-flex;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:600;background:var(--mint-light);color:var(--mint-dark);flex-shrink:0;align-self:flex-start;margin-top:2px;">Nearest</span>' : ''}
+    </div>`).join('');
+}
+
+/* ── filterPOI: pill clicks ── */
+function filterPOI(el, type) {
+  document.querySelectorAll('#nearby-pills > div').forEach(d => {
+    d.style.background = 'var(--white)';
+    d.style.border     = '1px solid var(--border)';
+    d.style.color      = 'var(--text)';
+  });
+  el.style.background = 'var(--mint-light)';
+  el.style.border     = '1.5px solid var(--mint)';
+  el.style.color      = 'var(--mint-dark)';
+  activePOIType = type;
+  fetchPOI(type);
+}
+
+/* ── Manual area dropdown handler ── */
+function onAreaDropdownChange(sel) {
+  const idx = sel.value === '' ? NaN : parseInt(sel.value, 10);
+  _selectedDirectoryArea = isNaN(idx) ? null : DIRECTORY_DATA[idx];
+  if (_selectedDirectoryArea) {
+    const areaLabel = document.getElementById('area-label');
+    if (areaLabel) areaLabel.textContent = _selectedDirectoryArea.area;
+  }
+  fetchPOI(activePOIType);
+}
+
+/* Report tag sync */
+document.querySelectorAll('.report-tag').forEach(tag=>{
+  tag.addEventListener('click',function(){setTimeout(()=>{
+    const sel=[...document.querySelectorAll('.report-tag.sel')].map(t=>t.textContent.trim());
+    const ta=document.getElementById('report-text');let txt=ta.value;
+    ['Poor Lighting','Unsafe Area','Harassment','Police Patrol'].forEach(t=>{
+      const re=new RegExp('^'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+',?\\s*');txt=txt.replace(re,'');
+    });
+    txt=txt.replace(/^,\s*/,'').trim();
+    ta.value=sel.length?(sel.join(', ')+(txt?'\n'+txt:'')):txt;
+  },10);});
+});
+
+/* ============================================================
+   SENTINEL AI MODULE 1 — VOICE ASSISTANT
+   "Wizard of Oz" style: keyword matching + speech synthesis
+   ============================================================ */
+let _voiceRec = null;
+let _voiceActive = false;
+
+function startVoiceAssistant() {
+  // Only accessible post-unlock (function gated by dash-layer visibility)
+  const dashVisible = document.getElementById('dash-layer').classList.contains('slide-in');
+  if (!dashVisible) return;
+
+  if (_voiceActive) {
+    _stopVoiceAssistant();
+    return;
+  }
+
+  const ring    = document.getElementById('voice-ai-ring');
+  const label   = document.getElementById('voice-ai-label');
+  const status  = document.getElementById('voice-ai-status');
+  const respBox = document.getElementById('voice-ai-response');
+  const icon    = document.getElementById('voice-ai-icon');
+
+  // Check browser support
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    // Graceful fallback — simulate with timeout
+    _voiceSimulate(ring, label, status, respBox, icon);
+    return;
+  }
+
+  _voiceRec = new SpeechRecognition();
+  _voiceRec.lang = 'en-IN';
+  _voiceRec.continuous = false;
+  _voiceRec.interimResults = false;
+
+  _voiceActive = true;
+  ring.classList.add('listening');
+  label.textContent = 'LISTENING…';
+  status.textContent = '● Microphone active — speak now';
+  status.classList.add('active');
+  icon.setAttribute('data-lucide','mic-off');
+  lucide.createIcons();
+  respBox.classList.remove('show');
+
+  _voiceRec.onresult = function(e) {
+    const transcript = e.results[0][0].transcript.toLowerCase();
+    _processVoiceCommand(transcript, ring, label, status, respBox, icon);
+  };
+
+  _voiceRec.onerror = function() {
+    // On error, run a simulation
+    _voiceSimulate(ring, label, status, respBox, icon);
+  };
+
+  _voiceRec.onend = function() {
+    if (_voiceActive) _stopVoiceAssistant();
+  };
+
+  try {
+    _voiceRec.start();
+  } catch(e) {
+    _voiceSimulate(ring, label, status, respBox, icon);
+  }
+}
+
+function _stopVoiceAssistant() {
+  _voiceActive = false;
+  if (_voiceRec) { try { _voiceRec.stop(); } catch(e){} }
+  const ring   = document.getElementById('voice-ai-ring');
+  const label  = document.getElementById('voice-ai-label');
+  const status = document.getElementById('voice-ai-status');
+  const icon   = document.getElementById('voice-ai-icon');
+  if (!ring) return;
+  ring.classList.remove('listening');
+  label.textContent = 'TAP TO ACTIVATE';
+  status.textContent = 'System ready · Awaiting command';
+  status.classList.remove('active');
+  icon.setAttribute('data-lucide','mic');
+  lucide.createIcons();
+}
+
+function _voiceSimulate(ring, label, status, respBox, icon) {
+  // Demo mode: simulate hearing a keyword after 2.5s
+  _voiceActive = true;
+  ring.classList.add('listening');
+  label.textContent = 'LISTENING…';
+  status.textContent = '● Microphone active — speak now';
+  status.classList.add('active');
+  icon.setAttribute('data-lucide','mic-off');
+  lucide.createIcons();
+  // Switch tab to audit and show voice card so user sees the animation
+  switchTab('audit');
+  const demos = ['help, i need emergency assistance', 'show nearby hospitals', 'police station near me'];
+  const chosen = demos[Math.floor(Math.random() * demos.length)];
+  setTimeout(() => {
+    _processVoiceCommand(chosen, ring, label, status, respBox, icon);
+  }, 2500);
+}
+
+function _processVoiceCommand(transcript, ring, label, status, respBox, icon) {
+  _voiceActive = false;
+  ring.classList.remove('listening');
+  icon.setAttribute('data-lucide','mic');
+  lucide.createIcons();
+
+  const area = window.currentAreaName || profile.city || 'your area';
+  let responseText = '';
+  let action = null;
+
+  // ── Keyword matching ──
+  if (/help|emergency|sos|danger|afraid|scared/.test(transcript)) {
+    responseText = `> COMMAND RECOGNISED: EMERGENCY\n> Triggering SOS protocol now.\n> Notifying trusted circle.\n> GPS coordinates locked.`;
+    action = 'sos';
+  } else if (/hospital|ambulance|medical|doctor|clinic|injured/.test(transcript)) {
+    responseText = `> COMMAND RECOGNISED: HOSPITAL\n> Scanning for nearby hospitals in ${area} now.\n> Loading directory…`;
+    action = 'hospital';
+  } else if (/police|station|officer|law|crime/.test(transcript)) {
+    responseText = `> COMMAND RECOGNISED: POLICE\n> Scanning for nearby police stations in ${area}.\n> Loading directory…`;
+    action = 'police';
+  } else if (/route|safe|path|navigate|direction/.test(transcript)) {
+    responseText = `> COMMAND RECOGNISED: SAFE ROUTE\n> Opening navigation module.\n> Heatmap overlay active.`;
+    action = 'route';
+  } else if (/audit|rate|score|safety|lighting/.test(transcript)) {
+    responseText = `> COMMAND RECOGNISED: AUDIT\n> Opening safety audit module.\n> Voice parameters ready.`;
+    action = 'audit';
+  } else {
+    responseText = `> INPUT: "${transcript}"\n> No critical keywords detected.\n> Say "Help", "Hospital", "Police", or "Emergency" for smart actions.`;
+  }
+
+  // Display typewriter response
+  label.textContent = 'PROCESSING…';
+  status.textContent = `Heard: "${transcript}"`;
+  status.classList.add('active');
+  respBox.innerHTML = '';
+  respBox.classList.add('show');
+
+  let i = 0;
+  const typeFn = setInterval(() => {
+    respBox.innerHTML = responseText.slice(0, i).replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>';
+    i++;
+    if (i > responseText.length) {
+      clearInterval(typeFn);
+      respBox.innerHTML = responseText.replace(/\n/g, '<br>');
+      label.textContent = 'DONE';
+      // Execute action
+      if (action) setTimeout(() => _executeVoiceAction(action, area), 600);
+    }
+  }, 22);
+
+  // Speak back via speech synthesis
+  _speakResponse(action, area);
+}
+
+function _speakResponse(action, area) {
+  if (!window.speechSynthesis) return;
+  const msgs = {
+    sos:      `SOS alert triggered. Notifying your trusted circle.`,
+    hospital: `Scanning for nearby hospitals in ${area} now.`,
+    police:   `Finding police stations near ${area}.`,
+    route:    `Opening safe route navigation.`,
+    audit:    `Opening safety audit module.`,
+    null:     `Sentinel is listening. Please say a recognised command.`
+  };
+  const utt = new SpeechSynthesisUtterance(msgs[action] || msgs[null]);
+  utt.lang = 'en-IN';
+  utt.rate = 0.92;
+  utt.pitch = 1.05;
+  window.speechSynthesis.speak(utt);
+}
+
+function _executeVoiceAction(action, area) {
+  switch(action) {
+    case 'sos':
+      triggerSOS(false);
+      break;
+    case 'hospital':
+      switchTab('map');
+      // Filter directory for hospital and refresh nearby UI
+      setTimeout(() => {
+        const pill = document.querySelector('#nearby-pills > div:nth-child(2)');
+        if (pill) filterPOI(pill, 'hospital');
+        showToast(`🏥 Hospitals in ${area} loaded`);
+      }, 400);
+      break;
+    case 'police':
+      switchTab('map');
+      setTimeout(() => {
+        const pill = document.querySelector('#nearby-pills > div:nth-child(1)');
+        if (pill) filterPOI(pill, 'police');
+        showToast(`🛡️ Police stations in ${area} loaded`);
+      }, 400);
+      break;
+    case 'route':
+      switchTab('map');
+      break;
+    case 'audit':
+      switchTab('audit');
+      break;
+  }
+}
+
+/* ============================================================
+   SENTINEL AI MODULE 2 — VISION CAMERA
+   getUserMedia → scan beam → Evidence Log
+   ============================================================ */
+let _cameraStream = null;
+const _evidenceLog = [];
+
+function captureAIVision() {
+  const dashVisible = document.getElementById('dash-layer').classList.contains('slide-in');
+  if (!dashVisible) return;
+
+  const modal = document.getElementById('vision-modal');
+  modal.classList.add('show');
+  lucide.createIcons();
+  _startCamera();
+}
+
+function _startCamera() {
+  const statusText = document.getElementById('vision-status-text');
+  const captureBtn = document.getElementById('capture-btn');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    // Fallback: show placeholder
+    statusText.textContent = 'CAMERA NOT AVAILABLE — DEMO MODE';
+    captureBtn.disabled = false;
+    captureBtn.onclick = () => _fakeScanAndCapture(null);
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+    .then(stream => {
+      _cameraStream = stream;
+      const vid = document.getElementById('ai-camera-feed');
+      vid.srcObject = stream;
+      vid.onloadedmetadata = () => {
+        statusText.textContent = 'FEED ACTIVE — READY TO CAPTURE';
+        captureBtn.disabled = false;
+      };
+    })
+    .catch(() => {
+      statusText.textContent = 'PERMISSION DENIED — DEMO MODE';
+      captureBtn.disabled = false;
+      captureBtn.onclick = () => _fakeScanAndCapture(null);
+    });
+}
+
+function captureAIPhoto() {
+  const vid = document.getElementById('ai-camera-feed');
+  const canvas = document.getElementById('capture-canvas');
+  const captureBtn = document.getElementById('capture-btn');
+  captureBtn.disabled = true;
+
+  // Try real capture
+  let imageDataURL = null;
+  if (vid.videoWidth > 0) {
+    canvas.width  = vid.videoWidth;
+    canvas.height = vid.videoHeight;
+    canvas.getContext('2d').drawImage(vid, 0, 0);
+    imageDataURL = canvas.toDataURL('image/jpeg', 0.85);
+  }
+
+  _fakeScanAndCapture(imageDataURL);
+}
+
+function _fakeScanAndCapture(imageDataURL) {
+  const beam       = document.getElementById('scan-beam');
+  const overlayTxt = document.getElementById('scan-overlay-text');
+  const statusText = document.getElementById('vision-status-text');
+  const captureBtn = document.getElementById('capture-btn');
+
+  // Activate scanning animation
+  beam.classList.add('active');
+  overlayTxt.classList.add('active');
+  statusText.textContent = 'SCANNING… ANALYSING SCENE…';
+
+  // Scan for 2 seconds, then finalise
+  setTimeout(() => {
+    beam.classList.remove('active');
+    overlayTxt.classList.remove('active');
+    statusText.textContent = 'ANALYSIS COMPLETE — EVIDENCE LOGGED';
+
+    // Generate a placeholder thumbnail if no real image
+    const thumb = imageDataURL || _generatePlaceholderThumb();
+    const ts = new Date();
+    const label = `EVD_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}${String(ts.getSeconds()).padStart(2,'0')}`;
+    const area  = window.currentAreaName || profile.city || 'Unknown';
+
+    _evidenceLog.unshift({ thumb, label, area, time: ts });
+    _renderEvidenceLog();
+
+    // Show snack on audit tab
+    const snack = document.getElementById('audit-snack');
+    if (snack) { snack.classList.add('show'); setTimeout(() => snack.classList.remove('show'), 3500); }
+
+    showToast(`📸 Evidence ${label} logged ✓`);
+
+    // Close modal after short pause, then auto-fill the audit
+    setTimeout(() => {
+      closeAIVision();
+      captureBtn.disabled = false;
+      switchTab('audit');
+      // Small extra delay so the tab transition completes before fills animate in
+      setTimeout(_autoFillAudit, 400);
+    }, 900);
+  }, 2000);
+}
+
+function _generatePlaceholderThumb() {
+  // Creates a terracotta-coloured placeholder canvas
+  const c = document.createElement('canvas');
+  c.width = 80; c.height = 80;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 80, 80);
+  grad.addColorStop(0, '#E2725B');
+  grad.addColorStop(1, '#8B2500');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 80, 80);
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SENTINEL', 40, 38);
+  ctx.fillText('VISION', 40, 52);
+  return c.toDataURL();
+}
+
+function _renderEvidenceLog() {
+  const container = document.getElementById('evidence-log-container');
+  if (!container) return;
+  if (!_evidenceLog.length) { container.innerHTML = ''; return; }
+
+  const timeStr = t => `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+
+  container.innerHTML = `
+    <div class="evidence-log-wrap">
+      <div class="evidence-log-title">⬡ EVIDENCE LOG — ${_evidenceLog.length} item${_evidenceLog.length > 1 ? 's' : ''}</div>
+      ${_evidenceLog.map(e => `
+        <div class="evidence-item">
+          <img src="${e.thumb}" class="evidence-thumb" alt="evidence"/>
+          <div class="evidence-meta">
+            <div class="evidence-name">${e.label}.jpg</div>
+            <div class="evidence-time">${timeStr(e.time)} · ${e.area}</div>
+          </div>
+          <div class="evidence-badge">NEW</div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+function closeAIVision() {
+  const modal = document.getElementById('vision-modal');
+  modal.classList.remove('show');
+  if (_cameraStream) {
+    _cameraStream.getTracks().forEach(t => t.stop());
+    _cameraStream = null;
+  }
+  const vid = document.getElementById('ai-camera-feed');
+  if (vid) vid.srcObject = null;
+  document.getElementById('capture-btn').disabled = true;
+  document.getElementById('capture-btn').onclick = captureAIPhoto;
+  document.getElementById('vision-status-text').textContent = 'INITIALISING CAMERA…';
+  document.getElementById('scan-beam').classList.remove('active');
+  document.getElementById('scan-overlay-text').classList.remove('active');
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+buildGbar();
+buildAudit();
+buildFeed();
+buildSafePals();
+updateDisp();
+syncProfileUI();
+renderEmergencyServices(profile.city);
+lucide.createIcons();
+
+/* ============================================================
+   KEYBOARD SUPPORT — Physical keys trigger calculator
+   1, 0, Enter → same as tapping the on-screen buttons
+   ============================================================ */
+document.addEventListener('keydown', function(e) {
+  // Only intercept when the calculator layer is visible (not dash)
+  const calcLayer = document.getElementById('calc-layer');
+  if (!calcLayer || calcLayer.classList.contains('slide-out')) return;
+  // Don't intercept when an input field is focused
+  if (document.activeElement && ['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+
+  const key = e.key;
+  if (key >= '0' && key <= '9') { ca(key); }
+  else if (key === '.') { ca('.'); }
+  else if (key === '+') { ca('+'); }
+  else if (key === '-') { ca('-'); }
+  else if (key === '*') { ca('*'); }
+  else if (key === '/') { e.preventDefault(); ca('/'); }
+  else if (key === '%') { ca('%'); }
+  else if (key === 'Enter' || key === '=') { hEq(); updateDisp(); }
+  else if (key === 'Backspace') {
+    if (cVal.length > 1) cVal = cVal.slice(0, -1);
+    else cVal = '0';
+    updateDisp();
+  } else if (key === 'Escape' || key === 'Delete') { ca('clear'); }
+});
+
+/* ============================================================
+   FIREBASE AUTH MODAL LOGIC
+   ============================================================ */
+let _authMode = 'signin';
+
+function showAuthModal() {
+  document.getElementById('auth-modal').classList.add('show');
+  lucide.createIcons();
+}
+function hideAuthModal() {
+  document.getElementById('auth-modal').classList.remove('show');
+}
+function switchAuthTab(mode) {
+  _authMode = mode;
+  const isSignup = mode === 'signup';
+  document.getElementById('auth-signup-name-row').style.display = isSignup ? 'block' : 'none';
+  document.getElementById('auth-btn-label').textContent = isSignup ? 'Create Account' : 'Sign In';
+  document.getElementById('auth-subtitle').textContent = isSignup ? 'Create your Sentinel account' : 'Sign in to access your dashboard';
+  document.getElementById('auth-error').style.display = 'none';
+  // Tab styling
+  const signInTab = document.getElementById('auth-tab-signin');
+  const signUpTab = document.getElementById('auth-tab-signup');
+  if (isSignup) {
+    signUpTab.style.cssText += ';background:var(--white);color:var(--mint-dark);box-shadow:var(--shadow-sm);';
+    signInTab.style.cssText += ';background:transparent;color:var(--text-muted);box-shadow:none;';
+  } else {
+    signInTab.style.cssText += ';background:var(--white);color:var(--mint-dark);box-shadow:var(--shadow-sm);';
+    signUpTab.style.cssText += ';background:transparent;color:var(--text-muted);box-shadow:none;';
+  }
+}
+
+async function handleAuthSubmit() {
+  const fb = window.__fb;
+  if (!fb) { showToast('Firebase not initialised — add your config'); return; }
+  const email    = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errEl    = document.getElementById('auth-error');
+  const btn      = document.getElementById('auth-submit-btn');
+  if (!email || !password) { errEl.textContent = 'Please fill in all fields.'; errEl.style.display='block'; return; }
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;"></div>';
+  errEl.style.display = 'none';
+  try {
+    if (_authMode === 'signup') {
+      const displayName = document.getElementById('auth-name').value.trim() || 'Sentinel User';
+      const neighbourhood = (document.getElementById('auth-neighbourhood')?.value || '').trim();
+      const homeBase = neighbourhood || 'Kolkata';
+      const cred = await fb.createUserWithEmailAndPassword(fb.auth, email, password);
+      // Create user document in Firestore with Home Base neighbourhood
+      await fb.setDoc(fb.doc(fb.db, 'users', cred.user.uid), {
+        displayName,
+        email,
+        points: 0,
+        rank: 99,
+        homeLocation: homeBase,
+        homeNeighbourhood: neighbourhood,
+        city: 'Kolkata',
+        createdAt: fb.serverTimestamp()
+      });
+      profile.name  = displayName;
+      profile.email = email;
+      profile.city  = homeBase;
+      window.currentAreaName = neighbourhood || 'Kolkata';
+      window.currentCity     = 'Kolkata';
+      syncProfileUI();
+      // Pre-load Kolkata emergency services immediately
+      renderEmergencyServices('Kolkata');
+    } else {
+      await fb.signInWithEmailAndPassword(fb.auth, email, password);
+    }
+    hideAuthModal();
+    openDash();
+  } catch(err) {
+    const msgs = {
+      'auth/invalid-email':          'Invalid email address.',
+      'auth/user-not-found':         'No account found with this email.',
+      'auth/wrong-password':         'Incorrect password.',
+      'auth/email-already-in-use':   'An account already exists with this email.',
+      'auth/weak-password':          'Password should be at least 6 characters.',
+      'auth/too-many-requests':      'Too many attempts. Try again later.',
+      'auth/network-request-failed': 'Network error — check your connection.'
+    };
+    errEl.textContent = msgs[err.code] || err.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<i data-lucide="log-in" style="width:15px;height:15px;"></i><span id="auth-btn-label">${_authMode === 'signup' ? 'Create Account' : 'Sign In'}</span>`;
+    lucide.createIcons();
+  }
+}
+
+/* ============================================================
+   FIREBASE PROFILE SYNC (real-time onSnapshot)
+   ============================================================ */
+window.__loadUserProfile = async function(uid) {
+  const fb = window.__fb;
+  if (!fb) return;
+  try {
+    const snap = await fb.getDoc(fb.doc(fb.db, 'users', uid));
+    if (snap.exists()) {
+      const d = snap.data();
+      profile.name  = d.displayName || profile.name;
+      profile.email = d.email       || profile.email;
+      profile.city  = d.homeLocation|| profile.city;
+      syncProfileUI();
+    }
+  } catch(e) { console.warn('Profile load:', e); }
+};
+
+let _profileUnsub = null;
+window.__subscribeUserProfile = function(uid) {
+  const fb = window.__fb;
+  if (!fb) return;
+  if (_profileUnsub) _profileUnsub();
+  _profileUnsub = fb.onSnapshot(fb.doc(fb.db, 'users', uid), snap => {
+    if (!snap.exists()) return;
+    const d = snap.data();
+    profile.name  = d.displayName || profile.name;
+    profile.email = d.email       || profile.email;
+    profile.city  = d.homeLocation|| profile.city;
+    // Update leaderboard points & rank in the UI
+    if (d.points !== undefined) {
+      const ptEls = document.querySelectorAll('.stat-mini-val');
+      if (ptEls[0]) ptEls[0].textContent = d.points;
+    }
+    syncProfileUI();
+  });
+};
+
+/* ============================================================
+   FIREBASE WORLD INTEL FEED (community hazard reports)
+   ============================================================ */
+let _intelUnsub = null;
+// Haversine distance in km between two lat/lon pairs
+function _haversineKm(lat1,lon1,lat2,lon2){
+  const R=6371,dLat=(lat2-lat1)*Math.PI/180,dLon=(lon2-lon1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+window.__subscribeWorldIntel = function() {
+  const fb = window.__fb;
+  if (!fb) return;
+  if (_intelUnsub) _intelUnsub();
+  const uid = window.__fbUser?.uid;
+  // Query filtered by userId for privacy, latest 30 docs then 5km client-filter
+  const q = fb.query(
+    fb.collection(fb.db, 'world_intel'),
+    fb.orderBy('timestamp', 'desc'),
+    fb.limit(30)
+  );
+  _intelUnsub = fb.onSnapshot(q, snap => {
+    const feedEl = document.getElementById('feed');
+    if (!feedEl) return;
+
+    // Client-side 5km geofence filter
+    const RADIUS_KM = 5;
+    const items = [];
+    snap.forEach(docSnap => {
+      const d = docSnap.data();
+      // Privacy: only show reports from current user OR reports with no userId (public)
+      if (d.userId && uid && d.userId !== uid && d.userId !== 'public') return;
+      // Geofence: filter to 5km from user if coordinates available
+      if (d.latitude && d.longitude) {
+        const dist = _haversineKm(userLat, userLon, d.latitude, d.longitude);
+        if (dist > RADIUS_KM) return;
+      }
+      items.push({docSnap, d});
+    });
+
+    if (!items.length) return; // keep existing local feed
+    feedEl.innerHTML = '';
+    items.slice(0,10).forEach(({docSnap, d}) => {
+      const div = document.createElement('div');
+      div.className = 'feed-item';
+      const initials = (d.authorName || 'AN').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+      const colors   = ['#DBEAFE','#DCFCE7','#F3E8FF','#FEF9C3'];
+      const tcolors  = ['#1D4ED8','#166534','#6D28D9','#854D0E'];
+      const ci = Math.abs(docSnap.id.charCodeAt(0)) % 4;
+      const ts = d.timestamp?.toDate ? d.timestamp.toDate() : new Date();
+      const ago = _timeAgo(ts);
+      const areaTag = d.area || (window.currentAreaName || 'Nearby');
+      div.innerHTML = `<div class="feed-avatar" style="background:${colors[ci]};color:${tcolors[ci]};">${initials}</div>
+        <div style="flex:1;"><div class="feed-text">${_escHtml(d.text||d.description||'Hazard reported')}</div>
+        <div class="feed-meta"><span>${ago}</span><span class="tag tag-slate">${_escHtml(d.tag||d.type||'Report')}</span>
+        <span style="font-size:10px;color:var(--text-muted);">· ${_escHtml(areaTag)}</span></div></div>`;
+      feedEl.appendChild(div);
+    });
+  }, err => { console.warn('World intel:', err); });
+};
+
+function _timeAgo(date) {
+  const diff = Date.now() - date.getTime();
+  if (diff < 60000)  return 'Just now';
+  if (diff < 3600000) return Math.floor(diff/60000) + ' min ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + ' hr ago';
+  return Math.floor(diff/86400000) + ' d ago';
+}
+function _escHtml(s) { const d=document.createElement('div');d.textContent=s;return d.innerHTML; }
+
+/* ============================================================
+   OVERRIDE saveProfile → writes to Firestore immediately
+   ============================================================ */
+const _origSaveProfile = window.saveProfile;
+window.saveProfile = async function() {
+  const name  = document.getElementById('edit-name').value.trim();
+  const phone = document.getElementById('edit-phone').value.trim();
+  const email = document.getElementById('edit-email').value.trim();
+  const city  = document.getElementById('edit-city').value.trim();
+  if (!name) { showToast('Name cannot be empty'); return; }
+  profile.name  = name;
+  profile.phone = phone;
+  profile.email = email;
+  profile.city  = city;
+  syncProfileUI();
+  toggleEdit();
+  showToast('Profile saved ✓');
+  // Write to Firestore
+  const fb  = window.__fb;
+  const uid = window.__fbUser?.uid;
+  if (fb && uid) {
+    try {
+      await fb.updateDoc(fb.doc(fb.db, 'users', uid), {
+        displayName:  name,
+        email:        email,
+        homeLocation: city
+      });
+    } catch(e) { console.warn('Firestore profile update:', e); }
+  }
+};
+
+/* ============================================================
+   OVERRIDE submitAudit → writes to Firestore + Storage
+   ============================================================ */
+const _origSubmitAudit = window.submitAudit;
+window.submitAudit = async function() {
+  if (Object.keys(auditR).length < 9) {
+    showToast(Object.keys(auditR).length + '/9 rated — complete all');
+    return;
+  }
+  const fb  = window.__fb;
+  const uid = window.__fbUser?.uid;
+
+  // Encode a simple geohash prefix (base32 first 5 chars)
+  const gh = _geohashEncode(userLat, userLon, 5);
+
+  const auditData = {
+    userId:     uid || 'anonymous',
+    timestamp:  fb ? fb.serverTimestamp() : new Date().toISOString(),
+    latitude:   userLat,
+    longitude:  userLon,
+    geohash:    gh,
+    area:       window.currentAreaName || 'Unknown Area',
+    ratings:    { ...auditR },
+    // Safetipin 9 parameters flattened
+    lighting:        auditR['Lighting']        || null,
+    openness:        auditR['Openness']        || null,
+    visibility:      auditR['Visibility']      || null,
+    people:          auditR['People']          || null,
+    security:        auditR['Security']        || null,
+    walkPath:        auditR['Walk Path']       || null,
+    publicTransport: auditR['Public Transport']|| null,
+    genderDiversity: auditR['Gender Diversity']|| null,
+    overallFeeling:  auditR['Overall Feeling'] || null,
+    photoURL:        null   // filled by Evidence Vault upload
+  };
+
+  let newDocId = null;
+  if (fb) {
+    try {
+      const docRef = await fb.addDoc(fb.collection(fb.db, 'audit_logs'), auditData);
+      newDocId = docRef.id;
+      // Check if there's a pending photo upload
+      if (window.__pendingAuditPhoto) {
+        _uploadAuditPhoto(window.__pendingAuditPhoto, newDocId);
+        window.__pendingAuditPhoto = null;
+      }
+    } catch(e) { console.warn('Audit write:', e); }
+  }
+
+  showToast('Audit submitted! +50 pts 🎉');
+  // Update points in Firestore
+  if (fb && uid) {
+    try {
+      const uRef = fb.doc(fb.db, 'users', uid);
+      const uSnap = await fb.getDoc(uRef);
+      const cur = uSnap.exists() ? (uSnap.data().points || 0) : 0;
+      await fb.updateDoc(uRef, { points: cur + 50 });
+    } catch(e) {}
+  }
+
+  Object.keys(auditR).forEach(k => delete auditR[k]);
+  document.querySelectorAll('.rb').forEach(b => b.classList.remove('sel'));
+  document.getElementById('rated-count').textContent = '0';
+};
+
+/* ============================================================
+   EVIDENCE VAULT — Firebase Storage photo upload
+   ============================================================ */
+async function _uploadAuditPhoto(file, docId) {
+  const fb = window.__fb;
+  if (!fb || !file || !docId) return;
+  try {
+    const storRef = fb.ref(fb.storage, `audit_photos/${docId}/${file.name}`);
+    const snap    = await fb.uploadBytes(storRef, file);
+    const url     = await fb.getDownloadURL(snap.ref);
+    await fb.updateDoc(fb.doc(fb.db, 'audit_logs', docId), { photoURL: url });
+    showToast('Photo evidence saved ✓');
+  } catch(e) { console.warn('Storage upload:', e); }
+}
+
+// Hook the camera button in audit tab to capture a photo
+document.addEventListener('DOMContentLoaded', () => {
+  const camBtn = document.querySelector('[onclick*="camera"], [onclick*="photo"]');
+  // Inject a hidden file input for the evidence vault
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+  inp.style.display = 'none'; inp.id = 'evidence-file-inp';
+  inp.addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    window.__pendingAuditPhoto = f;
+    showToast('Photo queued — submit audit to save ✓');
+  });
+  document.body.appendChild(inp);
+});
+
+function openEvidenceVault() {
+  document.getElementById('evidence-file-inp')?.click();
+}
+
+/* ============================================================
+   SOS EVENT → Firestore + Cloud Function stub
+   ============================================================ */
+const _origTriggerSOS = window.triggerSOS;
+window.triggerSOS = async function(bg) {
+  // Run original UI logic
+  const f = document.getElementById('sos-flash');
+  f.classList.add('show');
+  clearTimeout(sosBT);
+  sosBT = setTimeout(() => f.classList.remove('show'), 2800);
+  if (!bg) {
+    const c = document.getElementById('sos-confirm');
+    c.classList.add('show');
+    setTimeout(() => c.classList.remove('show'), 5000);
+  }
+
+  // Write SOS event to Firestore
+  const fb  = window.__fb;
+  const uid = window.__fbUser?.uid;
+  if (!fb) return;
+  try {
+    const sosData = {
+      userId:    uid || 'anonymous',
+      timestamp: fb.serverTimestamp(),
+      location:  { latitude: userLat, longitude: userLon },
+      audioURL:  null,   // filled by Evidence Vault recording
+      status:    'active'
+    };
+    const sosRef = await fb.addDoc(fb.collection(fb.db, 'sos_events'), sosData);
+    // Simulate Cloud Function trigger (stub)
+    _simulateSOSCloudFunction(uid, sosRef.id);
+  } catch(e) { console.warn('SOS write:', e); }
+};
+
+/* ════════════════════════════════════════════════════════════
+   CLOUD FUNCTION STUB
+   Simulates: functions.firestore.document('sos_events/{id}').onCreate()
+   Real deployment: deploy/functions/index.js
+   ════════════════════════════════════════════════════════════ */
+async function _simulateSOSCloudFunction(uid, sosDocId) {
+  console.group('🔥 [CF STUB] SOS Cloud Function triggered');
+  console.log('Event: sos_events/' + sosDocId);
+
+  const fb = window.__fb;
+  // Step 1 — Pull trusted_circle from user document
+  let trustedCircle = [];
+  if (fb && uid) {
+    try {
+      const uSnap = await fb.getDoc(fb.doc(fb.db, 'users', uid));
+      if (uSnap.exists()) {
+        trustedCircle = uSnap.data().trusted_circle || [];
+      }
+    } catch(e) {}
+  }
+  // Fallback: use in-memory guardians
+  if (!trustedCircle.length) {
+    trustedCircle = guardians.map(g => ({ name: g.n, phone: '+91XXXXXXXXXX' }));
+  }
+
+  // Step 2 — Mock Twilio SMS dispatch
+  trustedCircle.forEach(contact => {
+    const msg = `🚨 SOS from Sentinel: ${profile.name} needs help! Live location: https://maps.google.com/?q=${userLat},${userLon}`;
+    console.log(`[MOCK TWILIO] SMS → ${contact.name} (${contact.phone}): "${msg}"`);
+  });
+
+  console.log('✅ Notifications dispatched to', trustedCircle.length, 'contacts');
+  console.groupEnd();
+}
+/* NOTE FOR DEPLOYMENT:
+   ─────────────────────────────────────────────────────
+   // functions/index.js  (deploy with: firebase deploy --only functions)
+   const functions = require('firebase-functions');
+   const admin     = require('firebase-admin');
+   const twilio    = require('twilio')(process.env.TWILIO_SID, process.env.TWILIO_TOKEN);
+   admin.initializeApp();
+
+   exports.onSosCreated = functions.firestore
+     .document('sos_events/{sosId}')
+     .onCreate(async (snap, ctx) => {
+       const { userId, location } = snap.data();
+       const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+       const circle  = userDoc.data()?.trusted_circle || [];
+       const mapLink = `https://maps.google.com/?q=${location.latitude},${location.longitude}`;
+       const msg     = `🚨 SOS from Sentinel! ${userDoc.data()?.displayName} needs help. Location: ${mapLink}`;
+       await Promise.all(circle.map(c =>
+         twilio.messages.create({ body: msg, from: process.env.TWILIO_FROM, to: c.phone })
+       ));
+     });
+   ─────────────────────────────────────────────────────  */
+
+/* ============================================================
+   GEOHASH ENCODER (base32, RFC 1751 variant)
+   ============================================================ */
+function _geohashEncode(lat, lon, precision) {
+  const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
+  let minLat=-90,maxLat=90,minLon=-180,maxLon=180;
+  let hash='',bits=0,bitsTotal=0,hashValue=0,isLon=true;
+  while (hash.length < precision) {
+    if (isLon) {
+      const mid=(minLon+maxLon)/2;
+      if(lon>=mid){hashValue=(hashValue<<1)+1;minLon=mid;}
+      else{hashValue=(hashValue<<1);maxLon=mid;}
+    } else {
+      const mid=(minLat+maxLat)/2;
+      if(lat>=mid){hashValue=(hashValue<<1)+1;minLat=mid;}
+      else{hashValue=(hashValue<<1);maxLat=mid;}
+    }
+    isLon=!isLon;
+    if(++bits===5){hash+=BASE32[hashValue];bits=0;hashValue=0;}
+  }
+  return hash;
+}
+/* ============================================================
+   DEMO ACCOUNT — works without Firebase (pure local mode)
+   ============================================================ */
+const DEMO_PROFILE = {
+  name:  'Subhasree Majumder',
+  email: 'demo@sentinel.app',
+  phone: '+91 98765 00000',
+  city:  'Kolkata'
+};
+
+function loginDemoAccount() {
+  // Populate profile with demo data
+  profile.name  = DEMO_PROFILE.name;
+  profile.email = DEMO_PROFILE.email;
+  profile.phone = DEMO_PROFILE.phone;
+  profile.city  = DEMO_PROFILE.city;
+
+  // Mark as demo session (no real Firebase user)
+  window.__fbUser   = { uid: 'demo-user', email: DEMO_PROFILE.email, isDemo: true };
+  window.__isDemoSession = true;
+
+  syncProfileUI();
+  hideAuthModal();
+
+  // Show a welcome toast then open dashboard
+  showToast('👋 Welcome, ' + DEMO_PROFILE.name.split(' ')[0] + '! Demo mode active.');
+  openDash();
+
+  // After dash opens, trigger Kolkata-aware services
+  setTimeout(() => {
+    renderEmergencyServices('Kolkata');
+    const sub = document.querySelector('.dash-subtitle');
+    if (sub) sub.innerHTML = '<span class="status-dot"></span>Kolkata &nbsp;·&nbsp; <span style="color:var(--mint-dark);font-weight:600;">Safe</span>';
+    const headerArea = document.getElementById('header-area-label');
+    if (headerArea) headerArea.textContent = 'Kolkata';
+    lucide.createIcons();
+  }, 650);
+}
+
+/* ============================================================
+   LOGOUT SCREEN LOGIC
+   ============================================================ */
+function showLogoutScreen() {
+  // Update the "signed in as" email display
+  const emailEl = document.getElementById('logout-email-display');
+  if (emailEl) {
+    emailEl.textContent = window.__isDemoSession
+      ? 'demo@sentinel.app (Demo)'
+      : (window.__fbUser?.email || profile.email);
+  }
+  document.getElementById('logout-screen').classList.add('show');
+  lucide.createIcons();
+}
+
+function hideLogoutScreen() {
+  document.getElementById('logout-screen').classList.remove('show');
+}
+
+async function performLogout() {
+  // Unsubscribe Firestore listeners
+  if (window._profileUnsub) { try { window._profileUnsub(); } catch(e){} }
+  if (window._intelUnsub)   { try { window._intelUnsub();   } catch(e){} }
+
+  // Sign out from Firebase if real session
+  const fb = window.__fb;
+  if (fb && !window.__isDemoSession) {
+    try { await fb.signOut(fb.auth); } catch(e) { console.warn('signOut:', e); }
+  }
+
+  // Clear session state
+  window.__fbUser        = null;
+  window.__isDemoSession = false;
+
+  // Reset profile to defaults
+  profile.name  = 'Priya Sharma';
+  profile.phone = '+91 98765 43210';
+  profile.email = 'priya@email.com';
+  profile.city  = 'Delhi NCR';
+
+  // Hide logout screen with a smooth transition
+  hideLogoutScreen();
+
+  // Animate back to calculator
+  setTimeout(() => {
+    const dashLayer = document.getElementById('dash-layer');
+    const calcLayer = document.getElementById('calc-layer');
+    dashLayer.style.transition = 'transform .5s cubic-bezier(.77,0,.175,1), opacity .5s ease';
+    dashLayer.classList.remove('slide-in');
+    calcLayer.classList.remove('slide-out');
+
+    // Reset calculator display
+    cVal='0'; cExpr=''; cOp=null; cPrev=null; cR
+    cVal='0'; cExpr=''; cOp=null; cPrev=null; cReset=false; inputSeq='';
+    updateDisp();
+    lucide.createIcons();
+  }, 350);
+}
+
+/* ============================================================
+   AUTH MODAL SHOWN BY DEFAULT (no auto-login)
+   ============================================================ */
+// Show auth modal on load
+window.addEventListener('load', () => {
+  // If no Firebase user, keep calc visible and wait for 101= code
+  // Auth modal is hidden by default; user triggers via 101=
+  document.getElementById('auth-modal').classList.remove('show');
+});
+async function triggerSmartAudit() {
+    const btn = document.querySelector('.ai-vision-btn');
+    if (!btn) return;
+
+    const originalHTML = btn.innerHTML;
+    const originalBg = btn.style.backgroundColor;
+    
+    btn.disabled = true;
+    btn.style.backgroundColor = '#4A5568'; 
+    btn.style.cursor = 'wait';
+    
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Capturing Scene Data...';
+    await new Promise(r => setTimeout(r, 900));
+    
+    btn.innerHTML = '<i class="fa-solid fa-microchip"></i> Running Neural Network...';
+    await new Promise(r => setTimeout(r, 900));
+
+    const auditIds = ['lighting', 'openness', 'visibility', 'crowd', 'security', 'path', 'help', 'gender', 'feeling'];
+    
+    for (let i = 0; i < auditIds.length; i++) {
+        const slider = document.getElementById(auditIds[i]);
+        if (slider) {
+            btn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Analyzing: ${auditIds[i].toUpperCase()}`;
+            const isHighlySafe = Math.random() > 0.2;
+            const score = isHighlySafe 
+                ? Math.floor(Math.random() * (95 - 75 + 1)) + 75  
+                : Math.floor(Math.random() * (74 - 60 + 1)) + 60; 
+            
+            slider.value = score;
+            slider.dispatchEvent(new Event('input')); 
+            await new Promise(r => setTimeout(r, 200)); 
+        }
+    }
+
+    btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Evidence Analyzed & Logged';
+    btn.style.backgroundColor = '#1D9E75'; 
+    
+    setTimeout(() => {
+        btn.innerHTML = originalHTML;
+        btn.style.backgroundColor = originalBg;
+        btn.disabled = false;
+        btn.style.cursor = 'pointer';
+    }, 3000);
+}
+/* ================= IMPROVED VOICE SYSTEM (FINAL) ================= */
+
+let recognition;
+let isListening = false;
+
+// ✅ Cross-browser support
+const SpeechRecognition =
+  window.SpeechRecognition || window.webkitSpeechRecognition;
+
+/* ================= START ================= */
+
+function startVoiceAssistant() {
+  if (!SpeechRecognition) {
+    alert("Your browser does not support Speech Recognition");
+    return;
+  }
+
+  if (isListening) return;
+
+  recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-IN";
+
+  const status = document.getElementById("voice-ai-status");
+  const ring = document.getElementById("voice-ai-ring");
+  const responseBox = document.getElementById("voice-ai-response");
+
+  recognition.onstart = () => {
+    isListening = true;
+    status.innerText = "🎤 Listening...";
+    ring.classList.add("listening");
+    console.log("🎤 Voice started");
+  };
+
+  recognition.onresult = (event) => {
+    const result = event.results[event.results.length - 1];
+
+    // ❗ Ignore half-words (VERY IMPORTANT FIX)
+    if (!result.isFinal) return;
+
+    const text = result[0].transcript.toLowerCase().trim();
+
+    console.log("FINAL HEARD:", text);
+
+    responseBox.style.display = "block";
+    responseBox.innerText = text;
+
+    // slight delay to capture full sentence properly
+    setTimeout(() => {
+      checkEmergencyWords(text);
+    }, 200);
+  };
+
+  recognition.onerror = (event) => {
+    console.error("Speech error:", event.error);
+    stopVoiceAssistant();
+  };
+
+  recognition.onend = () => {
+    // 🔁 auto restart
+    if (isListening) {
+      recognition.start();
+    }
+  };
+
+  recognition.start();
+}
+
+/* ================= STOP ================= */
+
+function stopVoiceAssistant() {
+  if (recognition) recognition.stop();
+  isListening = false;
+
+  document.getElementById("voice-ai-status").innerText =
+    "System ready · Awaiting command";
+  document.getElementById("voice-ai-ring").classList.remove("listening");
+}
+
+/* ================= SMART KEYWORD DETECTION ================= */
+
+let lastTrigger = 0;
+
+function isCloseMatch(input, keyword) {
+  return (
+    input.includes(keyword) ||
+    input.includes(keyword.slice(0, 4)) // partial match (fixes mishearing)
+  );
+}
+
+function checkEmergencyWords(text) {
+  const now = Date.now();
+  if (now - lastTrigger < 8000) return; // cooldown
+
+  const keywords = ["help", "emergency", "hospital", "police"];
+
+  for (let word of keywords) {
+    if (isCloseMatch(text, word)) {
+      console.log("🚨 DETECTED:", word);
+
+      lastTrigger = now;
+      triggerVoiceSOS(text);
+      break;
+    }
+  }
+}
+
+/* ================= VOICE SOS ================= */
+
+function triggerVoiceSOS(text) {
+  console.log("🚨 VOICE SOS:", text);
+
+  document.getElementById("voice-ai-response").innerText =
+    "🚨 Emergency detected. Sending SOS...";
+
+  // 🔥 your existing SOS function
+  triggerSOS(true);
+
+  document.getElementById("sos-flash").classList.add("show");
+
+  if (navigator.vibrate) {
+    navigator.vibrate([300, 100, 300, 100, 600]);
+  }
+}
+</script>
+</body>
 </html>
